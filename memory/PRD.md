@@ -15,25 +15,22 @@ PWA de gestion de loterie haïtienne/brésilienne avec rôles, ventes POS, résu
 - **Frontend**: React 19 + React Router + Tailwind + shadcn/ui + recharts; AppContext (auth/i18n/currency)
 - **Style**: Dark theme, Gold (#FACC15) primary, IBM Plex Mono pour nombres, Chivo pour titres
 
-## Implementations (Feb 2026 - V1)
-- [x] Auth JWT (login, /me, token expire 12h)
-- [x] Rôles: super_admin, directeur, superviseur, admin, sous_admin, machann
-- [x] Seed automatique: 8 loteries + Super Admin (admin@toplotto.ht / Admin123!) + Agence Principale
-- [x] CRUD Utilisateurs (admin/super_admin)
-- [x] CRUD Agences
-- [x] POS Vente (lottery + draw_date + game + play_type + cart + Enter shortcuts + auto-print)
-- [x] Liste/Recherche Tickets
-- [x] Vérification ticket (par numéro) + Paiement gagnants
-- [x] Saisie résultats (3 numéros par jeu par tirage)
-- [x] Calcul automatique gains (straight, box, straight_box, combo + position multiplier 1.0/0.5/0.25)
-- [x] Dashboard: ventes, paiements, profit, tickets vendus/gagnants, balance, trend 7j, by_lottery pie, recent
-- [x] Paiements (historique)
-- [x] Rapports (group_by day/lottery/machann/agency) + export CSV
-- [x] Paramètres globaux (business info, taux change, payouts configurables par jeu/play_type)
-- [x] Audit logs sur actions clés
-- [x] i18n FR/HT switch
-- [x] Devise switch HTG/BRL
-- [x] Impression ticket (modal blanc/noir style thermique avec barcode visuel + footer personnalisé)
+## Implementations (Feb 2026 - V2 PRODUCTION)
+- [x] Auth JWT + 6 rôles
+- [x] 8 loteries (FL/GA/NY/TX × Midi/Soir) avec state+session
+- [x] **Auto-détection du jeu par nombre de chiffres** (2=Bòlèt, 3=Pick 3, 4=Pick 4, 5=Pick 5) — plus de sélecteur play_type
+- [x] **Mariage Boul**: 2 numéros 2-chiffres en dialog, gagne si les 2 sortent (payout 500x configurable)
+- [x] **Paires automatiques**: bulk add — plusieurs numéros séparés par espace/virgule + un seul prix
+- [x] **Édition individuelle des prix** dans le panier après ajout en lot
+- [x] **Taux Bòlèt configurables**: premye/dezyèm/twazyèm (default 50/20/10) + mariage (500x)
+- [x] Pick 3/4/5 payouts configurables (default 500/5000/50000x)
+- [x] **Résultats par date — 8 tirages en grille** (FL/GA/NY/TX × Midi/Soir) avec Pick 3, Pick 4, 3 boul bòlèt par tirage
+- [x] **Identification des boules gagnantes** sur ticket (★ 1ye/2yèm/3yèm pour bòlèt, ★ Sòti pour mariage)
+- [x] **Affichage des numéros tirés** dans la page Vérification (Bòlèt boul + Pick 3 + Pick 4 visibles)
+- [x] **Conversion devise HTG↔BRL réelle** via formatMoney avec taux configurable
+- [x] **Responsive mobile** avec hamburger menu, header compact, formulaires empilables
+- [x] **Tout en français/kreyòl** — zéro anglais (TIKÈ, DAT, LOTRI, MACHANN, KLIYAN, JWÈT, REZILTA, GENYEN, PEYE...)
+- [x] Migration auto des loteries (state+session) au démarrage
 
 ## Backlog (P1/P2)
 - P1: 2FA TOTP

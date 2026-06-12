@@ -84,10 +84,24 @@ export default function Dashboard() {
           ) : (
             <ResponsiveContainer width="100%" height={260}>
               <PieChart>
-                <Pie data={stats.by_lottery} dataKey="value" cx="50%" cy="50%" outerRadius={80} label={(e) => e.name.split(" ")[0]} labelLine={false}>
+                <Pie
+                  data={stats.by_lottery} dataKey="value"
+                  cx="40%" cy="50%" outerRadius={70}
+                  label={(e) => {
+                    // Compact: "FL Midi" -> "FL-M", "Florida Soir" -> "FL-S"
+                    const parts = e.name.split(" ");
+                    const stateMap = { Florida: "FL", Georgia: "GA", "New": "NY", Texas: "TX" };
+                    const st = stateMap[parts[0]] || parts[0].slice(0, 2).toUpperCase();
+                    const sess = e.name.includes("Midi") ? "M" : "S";
+                    return `${st}-${sess}`;
+                  }}
+                  labelLine={false}
+                  fontSize={10}
+                >
                   {stats.by_lottery.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                 </Pie>
                 <Tooltip contentStyle={{ background: "#18181B", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px" }} />
+                <Legend verticalAlign="middle" align="right" layout="vertical" iconSize={8} wrapperStyle={{ fontSize: 10, paddingLeft: 8 }} />
               </PieChart>
             </ResponsiveContainer>
           )}
