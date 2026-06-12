@@ -1,0 +1,38 @@
+{
+  "summary": "First iteration testing of TOP LOTTO PWA. Backend 27/27 pytest tests passed covering auth, lotteries, users, agencies, tickets, results, payout calculation (verified bòlèt straight 10 HTG @ position 1 -> 600 HTG payout), pay flow, dashboard stats, reports CSV, settings, and authorization (machann 403, anon 401). Frontend playwright run validated login -> dashboard (6 stat cards + trend chart + recent tickets/results), Sales POS (lottery select, game/playtype, cart total update, sell creates ticket with print modal showing TL26061200002 + barcode + i18n footer 'Mèsi pou konfyans ou'), Verify/Results/Admin pages render, add-user dialog opens, FR<->HT language switch and HTG<->BRL currency switch both work.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Print Ticket / Add-User dialogs", "issues": ["Radix Dialog console warnings: 'DialogContent requires a DialogTitle' and missing aria-describedby. Accessibility only, non-blocking. Wrap a hidden DialogTitle (VisuallyHidden) in TicketPrint.jsx and Admin dialogs."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_toplotto_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional A11y polish: add VisuallyHidden DialogTitle in TicketPrint.jsx (and any other dialogs without titles) to silence Radix dialog accessibility warnings.",
+    "Consider adding more dashboard data-testid attributes on individual stat cards (currently only dashboard-page is testid) for finer-grained future testing."
+  ],
+  "critical_code_review_comments": [
+    "server.py: dashboard_stats trend uses created_at string comparison with mixed Z/ISO timestamps which can be fragile across timezones; consider storing draw_date or using a date index. Currently works because all data is recent UTC.",
+    "server.py compute_payout: rate type-cast is fine, but check_win short-circuits at first matching index; for play_type 'straight_box' it returns 'straight' if num == winning at idx, otherwise checks 'box' — works correctly but mixed-mode wins on different positions only consider position of first hit.",
+    "server.py: cancel_ticket does not refund/reset payout_amount; if ticket was paid then cancelled, accounting will drift. Add a guard preventing cancellation of paid tickets or process a reversal.",
+    "Frontend Sales page: number-input has no max-length validation per game (bolet=2, pick3=3 etc.) — could allow invalid numbers to reach backend.",
+    "Backend: pay_ticket allows role 'machann' to pay any ticket; consider restricting machann to own tickets only (matches list_tickets scoping)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_toplotto_api.py (new)",
+    "/app/backend/tests/conftest.py (new)"
+  ],
+  "success_rate": {"backend": "100% (27/27)", "frontend": "100% (all flows passed)"},
+  "test_credentials": "admin@toplotto.ht / Admin123! (super_admin, seeded)",
+  "seed_data_creation": "Tests created a TEST_ machann user, a TEST_ agency, and one ticket TLYYMMDD##### with a winning bolet result for lottery_id index 0 on today's date. Settings restored to defaults after update test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test file at /app/backend/tests/test_toplotto_api.py is full regression suite (auth, users, agencies, tickets, results, payouts, dashboard, reports, settings, authorization). Run via: pytest /app/backend/tests/ -v. Frontend critical flows confirmed via playwright (login, dashboard, sales -> sell -> print modal, verify/results/admin pages, lang/currency switches). Pay flow validated end-to-end: bòlèt straight 10 HTG @ position 1 -> 600 HTG payout (60x straight rate * 1.0 position multiplier).",
+  "rca_of_the_issue": "N/A - no blocking issues observed. Only console-level a11y warnings on Radix Dialog (missing DialogTitle/DialogDescription)."
+}
