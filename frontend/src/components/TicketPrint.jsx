@@ -1,5 +1,5 @@
 import React, { useRef } from "react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Printer, X } from "lucide-react";
 import { useApp } from "@/lib/context";
@@ -23,6 +23,7 @@ export default function TicketPrint({ ticket, onClose }) {
   return (
     <Dialog open={true} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="bg-white text-black border-white max-w-md p-0" data-testid="ticket-print-modal">
+        <DialogTitle className="sr-only">Ticket {ticket.ticket_number}</DialogTitle>
         <div ref={printRef} className="print-area ticket-print" id="printable">
           <div className="text-center border-b-2 border-dashed border-black pb-3">
             <div className="text-2xl font-black tracking-tight">{settings?.business_name || "TOP LOTTO"}</div>
