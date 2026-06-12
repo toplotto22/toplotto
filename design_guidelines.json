@@ -1,0 +1,131 @@
+{
+  "theme": "dark",
+  "archetype": "Archetype 4 (Swiss & High-Contrast) - B2B Casino Operations Variant",
+  "domain_context": "B2B Lottery Operations Dashboard (Stake-like performance, high density, professional betting)",
+  "colors": {
+    "background": {
+      "base": "#09090B",
+      "surface": "#121214",
+      "surface_elevated": "#1A1A1E",
+      "surface_highlight": "#27272A"
+    },
+    "primary": {
+      "DEFAULT": "#FACC15",
+      "foreground": "#000000",
+      "hover": "#EAB308"
+    },
+    "secondary": {
+      "DEFAULT": "#27272A",
+      "foreground": "#FFFFFF",
+      "hover": "#3F3F46"
+    },
+    "accents": {
+      "win_green": "#22C55E",
+      "loss_red": "#EF4444",
+      "haiti_blue": "#3B82F6",
+      "gold": "#FACC15"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "muted": "#52525B",
+      "inverse": "#000000"
+    },
+    "border": {
+      "DEFAULT": "rgba(255, 255, 255, 0.08)",
+      "focus": "#FACC15",
+      "divider": "rgba(255, 255, 255, 0.04)"
+    }
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Chivo",
+      "body": "IBM Plex Sans",
+      "mono": "IBM Plex Mono"
+    },
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl tracking-tighter font-black text-white",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-bold text-white",
+      "h3": "text-lg sm:text-xl font-bold text-white",
+      "body": "text-sm text-zinc-300 leading-relaxed",
+      "numbers": "font-mono font-medium tracking-wider text-zinc-100",
+      "labels": "text-xs font-bold uppercase tracking-[0.1em] text-zinc-500"
+    }
+  },
+  "layout_spacing": {
+    "container": "w-full max-w-[1600px] mx-auto px-4 sm:px-6",
+    "bento_grid": "grid grid-cols-1 md:grid-cols-4 lg:grid-cols-12 gap-4 sm:gap-6",
+    "dashboard_density": "Tight spacing for maximum data visibility without scrolling. Use gap-3 or gap-4 for widget clusters.",
+    "card_padding": "p-4 sm:p-5",
+    "table_density": "py-2 px-3 text-sm",
+    "radius": {
+      "base": "rounded-lg",
+      "small": "rounded-md",
+      "full": "rounded-full"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-yellow-400 text-black font-bold hover:bg-yellow-500 hover:-translate-y-[1px] transition-all shadow-[0_0_15px_rgba(250,204,21,0.15)] hover:shadow-[0_0_20px_rgba(250,204,21,0.3)]",
+      "secondary": "bg-zinc-800 text-white border border-zinc-700 hover:bg-zinc-700 transition-colors",
+      "danger": "bg-red-500/10 text-red-500 border border-red-500/20 hover:bg-red-500/20",
+      "success": "bg-green-500/10 text-green-500 border border-green-500/20 hover:bg-green-500/20"
+    },
+    "inputs": {
+      "style": "bg-zinc-900 border border-white/10 focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 text-white font-mono placeholder:text-zinc-600 rounded-md transition-colors",
+      "density": "h-10 px-3",
+      "shortcuts": "Visual indicators for keyboard bindings (e.g., [Enter], [Alt+P]) placed as right-elements in inputs."
+    },
+    "cards": {
+      "style": "bg-[#121214] border border-white/5 rounded-lg overflow-hidden relative",
+      "header": "border-b border-white/5 pb-3 mb-3 flex justify-between items-center",
+      "glow_effect": "For active or winning cards, apply inset box-shadow or top border highlighting with the accent color."
+    },
+    "tables": {
+      "wrapper": "w-full overflow-x-auto rounded-md border border-white/5",
+      "header": "text-xs font-bold text-zinc-400 uppercase tracking-wider bg-[#1A1A1E] border-b border-white/10",
+      "row": "border-b border-white/5 hover:bg-white/[0.02] transition-colors text-sm font-mono text-zinc-300"
+    },
+    "receipt_print": {
+      "style": "bg-white text-black font-mono p-4 w-[300px] mx-auto text-xs grayscale print:shadow-none print:w-full",
+      "details": "High contrast black-on-white specifically for ESC/POS and HTML thermal printing preview. Must break out of the dark theme just for the print preview modal."
+    }
+  },
+  "media": {
+    "login_background": {
+      "url": "https://images.unsplash.com/photo-1709377195538-5522ed0f9e10?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1ODF8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGRhcmslMjBnb2xkJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3ODEyMjY4Mjd8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract dark amber/gold curves on black. Use as a subtle, low-opacity background for the login screen to establish the 'Gold/Black' premium ops aesthetic.",
+      "category": "background"
+    },
+    "texture_overlay": {
+      "url": "https://images.unsplash.com/photo-1513346940221-6f673d962e97?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1ODF8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGRhcmslMjBnb2xkJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3ODEyMjY4Mjd8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract golden falling lines. Use for sidebar texture or success states.",
+      "category": "texture"
+    },
+    "dashboard_accent": {
+      "url": "https://images.unsplash.com/photo-1626775238053-4315516eedc9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w8NjA3MDR8MHwxfHNlYXJjaHwyfHxjYXNpbm8lMjBiZXR0aW5nJTIwY2hpcHMlMjBkYXJrfGVufDB8fHx8MTc4MTIyNjgyN3ww&ixlib=rb-4.1.0&q=85",
+      "description": "Dark casino aesthetic elements. Useful for empty states or marketing banners within the app.",
+      "category": "visual"
+    }
+  },
+  "motion": {
+    "hover": "transition-all duration-200 ease-in-out",
+    "click": "active:scale-[0.98]",
+    "alerts": "slide-in from top/bottom with Framer Motion, snappy spring physics",
+    "loaders": "Skeleton loaders (shimmering dark gray) preferred over spinners for table data."
+  },
+  "icons": {
+    "library": "@phosphor-icons/react",
+    "style": "duotone for navigation/active states, bold for actions, regular for micro-UI. Colorize with accents (green for payout, gold for sales, blue for users)."
+  },
+  "instructions_to_main_agent": [
+    "FORCE DARK MODE: The application is strictly a dark-theme B2B operations dashboard. Do not implement a light mode toggle unless strictly necessary. Ensure 'dark' class is on the root.",
+    "TYPOGRAPHY: Install and use 'Chivo' for headings, 'IBM Plex Sans' for body, and heavily use 'IBM Plex Mono' for ALL numbers, lottery tickets, currency amounts, and tabular data. This is crucial for legibility.",
+    "POINT OF SALE (POS) UX: The 'Page de Vente' must be optimized for speed. Machanns type numbers quickly. Implement auto-focus on inputs, use Enter to add to cart, and visual keyboard shortcuts (e.g., [Enter], [Alt+P]).",
+    "THEME COLORS: Use the provided Haitian flag-inspired accents subtly—Gold (Primary CTA), Red (Losses/Deletes), Green (Wins/Profits), Blue (Secondary Highlights). Avoid the typical 'purple AI slop'.",
+    "HEADER Toggles: Place the HTG/BRL (currency) and FR/HT (language) switchers prominently in the top header. They must be easily accessible at all times.",
+    "PRINT PREVIEW: The 'Impression ticket' modal must use a stark white background with black monospaced text to simulate thermal ESC/POS receipt paper. It should contrast sharply with the dark dashboard.",
+    "DATA-TESTID: You MUST add 'data-testid' attributes to all interactive elements, forms, tabs, and buttons. Example: data-testid='login-submit-button', data-testid='sales-add-ticket'.",
+    "COMPONENT CHOICE: Rely heavily on standard Shadcn components (Tables, Inputs, Dialogs, Selects) but override their default styles to match the border and background colors defined in this JSON. No floating glassmorphism for data cards; use flat, solid surfaces with 1px borders."
+  ]
+}
