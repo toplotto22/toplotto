@@ -5,141 +5,178 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
-} from "@/components/ui/select";
 import { toast } from "sonner";
-import { Trophy } from "lucide-react";
+import { Trophy, Save } from "lucide-react";
+
+const STATE_COLORS = {
+  FL: "border-orange-500/30 bg-orange-500/5",
+  GA: "border-red-500/30 bg-red-500/5",
+  NY: "border-blue-500/30 bg-blue-500/5",
+  TX: "border-yellow-500/30 bg-yellow-500/5",
+};
+const STATE_TEXT = {
+  FL: "text-orange-400",
+  GA: "text-red-400",
+  NY: "text-blue-400",
+  TX: "text-yellow-400",
+};
 
 export default function Results() {
-  const { t, lotteries, user } = useApp();
-  const [lotteryId, setLotteryId] = useState("");
-  const [drawDate, setDrawDate] = useState(new Date().toISOString().slice(0, 10));
-  const [pick3, setPick3] = useState(["", "", ""]);
-  const [pick4, setPick4] = useState(["", "", ""]);
-  const [pick5, setPick5] = useState(["", "", ""]);
-  const [bolet, setBolet] = useState(["", "", ""]);
-  const [history, setHistory] = useState([]);
-
-  useEffect(() => {
-    if (lotteries.length && !lotteryId) setLotteryId(lotteries[0].id);
-  }, [lotteries]);
-
-  const loadHistory = async () => {
-    const { data } = await api.get("/results");
-    setHistory(data);
-  };
-  useEffect(() => { loadHistory(); }, []);
-
+  const { t, lotteries, user, lang } = useApp();
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [draws, setDraws] = useState({}); // lottery_id -> {pick3, pick4, pick5, bolet[3]}
   const canEdit = ["super_admin", "admin", "directeur"].includes(user?.role);
 
-  const submit = async (e) => {
-    e.preventDefault();
+  const load = async () => {
+    if (!lotteries.length) return;
+    const { data } = await api.get(`/results?draw_date=${date}`);
+    const map = {};
+    for (const l of lotteries) {
+      const r = data.find((x) => x.lottery_id === l.id);
+      map[l.id] = {
+        pick3: r?.pick3 || "",
+        pick4: r?.pick4 || "",
+        pick5: r?.pick5 || "",
+        bolet: r?.bolet?.length === 3 ? r.bolet : ["", "", ""],
+      };
+    }
+    setDraws(map);
+  };
+
+  useEffect(() => { load(); }, [date, lotteries.length]);
+
+  const setField = (lid, field, val, idx = null) => {
+    setDraws((prev) => {
+      const next = { ...prev };
+      const cur = { ...(next[lid] || { pick3: "", pick4: "", pick5: "", bolet: ["", "", ""] }) };
+      if (field === "bolet") {
+        const arr = [...cur.bolet];
+        arr[idx] = val;
+        cur.bolet = arr;
+      } else {
+        cur[field] = val;
+      }
+      next[lid] = cur;
+      return next;
+    });
+  };
+
+  const saveAll = async () => {
     try {
-      await api.post("/results", {
-        lottery_id: lotteryId, draw_date: drawDate,
-        pick3, pick4, pick5, bolet,
+      const tasks = lotteries.map(async (l) => {
+        const d = draws[l.id];
+        if (!d) return;
+        // skip if all empty
+        if (!d.pick3 && !d.pick4 && !d.pick5 && !d.bolet.some(Boolean)) return;
+        await api.post("/results", {
+          lottery_id: l.id, draw_date: date,
+          pick3: d.pick3, pick4: d.pick4, pick5: d.pick5, bolet: d.bolet,
+        });
       });
+      await Promise.all(tasks);
       toast.success(t("success"));
-      loadHistory();
+      load();
     } catch (err) {
       toast.error(err.response?.data?.detail || t("error"));
     }
   };
 
-  const Row = ({ label, values, setValues, digits, color }) => (
-    <div>
-      <Label className="text-xs uppercase tracking-wider text-zinc-400 font-bold">{label} ({digits} {t("number")}s)</Label>
-      <div className="grid grid-cols-3 gap-2 mt-2">
-        {values.map((v, i) => (
-          <Input
-            key={i}
-            value={v}
-            maxLength={digits}
-            data-testid={`result-${label.toLowerCase()}-${i}`}
-            onChange={(e) => {
-              const v2 = e.target.value.replace(/\D/g, "");
-              const next = [...values]; next[i] = v2; setValues(next);
-            }}
-            placeholder={`#${i + 1}`}
-            disabled={!canEdit}
-            className={`bg-zinc-900 border-white/10 h-12 font-mono text-2xl tracking-widest text-center focus:border-yellow-400 ${color}`}
-          />
-        ))}
-      </div>
-    </div>
-  );
+  const groupedByState = ["FL", "GA", "NY", "TX"];
+  const lotteryByStateSession = (state, session) =>
+    lotteries.find((l) => l.state === state && l.session === session);
 
   return (
-    <div className="space-y-6" data-testid="results-page">
-      <h1 className="text-4xl font-black tracking-tighter">{t("results")}</h1>
-
-      {canEdit && (
-        <Card className="bg-[#121214] border-white/5 p-5">
-          <form onSubmit={submit} className="space-y-5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs uppercase tracking-wider text-zinc-400">{t("lottery")}</Label>
-                <Select value={lotteryId} onValueChange={setLotteryId}>
-                  <SelectTrigger data-testid="results-lottery" className="bg-zinc-900 border-white/10 h-10 mt-2">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-zinc-900 border-white/10 text-white">
-                    {lotteries.map((l) => <SelectItem key={l.id} value={l.id} className="focus:bg-yellow-400/10 focus:text-yellow-400">{l.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs uppercase tracking-wider text-zinc-400">{t("drawDate")}</Label>
-                <Input type="date" data-testid="results-date" value={drawDate} onChange={(e) => setDrawDate(e.target.value)} className="bg-zinc-900 border-white/10 h-10 mt-2 font-mono" />
-              </div>
-            </div>
-
-            <Row label="BÒLÈT" values={bolet} setValues={setBolet} digits={2} color="text-green-400" />
-            <Row label="PICK3" values={pick3} setValues={setPick3} digits={3} color="text-yellow-400" />
-            <Row label="PICK4" values={pick4} setValues={setPick4} digits={4} color="text-blue-400" />
-            <Row label="PICK5" values={pick5} setValues={setPick5} digits={5} color="text-red-400" />
-
-            <Button data-testid="results-submit" type="submit" className="bg-yellow-400 hover:bg-yellow-500 text-black font-bold glow-gold">
-              <Trophy className="w-4 h-4 mr-2" /> {t("save")}
-            </Button>
-          </form>
-        </Card>
-      )}
-
-      <Card className="bg-[#121214] border-white/5 p-5">
-        <h3 className="text-xs uppercase tracking-wider text-zinc-400 font-bold mb-4">{t("results")}</h3>
-        <div className="space-y-3">
-          {history.length === 0 && <div className="text-zinc-600 text-sm text-center py-8">{t("noResults")}</div>}
-          {history.map((r) => {
-            const lottery = lotteries.find((l) => l.id === r.lottery_id);
-            return (
-              <div key={r.id} className="p-4 bg-zinc-900/50 rounded-md border border-white/5">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-bold">{lottery?.name || "?"}</div>
-                  <div className="font-mono text-sm text-zinc-400">{r.draw_date}</div>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  {[
-                    ["BÒLÈT", r.bolet, "text-green-400 bg-green-500/5 border-green-500/20"],
-                    ["P3", r.pick3, "text-yellow-400 bg-yellow-400/5 border-yellow-400/20"],
-                    ["P4", r.pick4, "text-blue-400 bg-blue-400/5 border-blue-400/20"],
-                    ["P5", r.pick5, "text-red-400 bg-red-500/5 border-red-500/20"],
-                  ].map(([lbl, vals, cls]) => (
-                    <div key={lbl} className={`p-2 rounded border ${cls}`}>
-                      <div className="text-[10px] uppercase tracking-wider font-bold mb-1">{lbl}</div>
-                      <div className="font-mono space-y-0.5">
-                        {(vals || []).filter(Boolean).map((v, i) => <div key={i}>#{i + 1}: <b>{v}</b></div>)}
-                        {!(vals || []).filter(Boolean).length && <span className="opacity-30">—</span>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+    <div className="space-y-4 lg:space-y-6" data-testid="results-page">
+      <div className="flex items-end justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl sm:text-4xl font-black tracking-tighter">{t("results")}</h1>
+          <p className="text-zinc-500 text-xs sm:text-sm mt-1 font-mono">
+            {date} — <span className="text-yellow-400 font-bold">{t("eightDraws")}</span>
+          </p>
         </div>
-      </Card>
+        <div className="flex gap-2 items-end">
+          <div>
+            <Label className="text-xs uppercase tracking-wider text-zinc-400">{t("date")}</Label>
+            <Input type="date" data-testid="results-date" value={date} onChange={(e) => setDate(e.target.value)}
+              className="bg-zinc-900 border-white/10 h-10 mt-1 font-mono" />
+          </div>
+          {canEdit && (
+            <Button data-testid="results-save-all" onClick={saveAll}
+              className="h-10 bg-yellow-400 hover:bg-yellow-500 text-black font-bold glow-gold">
+              <Save className="w-4 h-4 mr-2" /> {t("save")}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {groupedByState.map((state) => (
+          ["midday", "evening"].map((session) => {
+            const lot = lotteryByStateSession(state, session);
+            if (!lot) return null;
+            const d = draws[lot.id] || { pick3: "", pick4: "", pick5: "", bolet: ["", "", ""] };
+            return (
+              <Card key={lot.id} className={`p-3 sm:p-4 border ${STATE_COLORS[state]}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-2xl font-black tracking-tight ${STATE_TEXT[state]}`}>{state}</span>
+                    <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-bold px-2 py-0.5 rounded bg-zinc-800">
+                      {session === "midday" ? t("sessionMidday") : t("sessionEvening")}
+                    </span>
+                  </div>
+                  <Trophy className="w-4 h-4 text-zinc-600" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  <div>
+                    <Label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">{t("pickThree")}</Label>
+                    <Input
+                      data-testid={`result-${state}-${session}-p3`}
+                      maxLength={3} disabled={!canEdit}
+                      value={d.pick3}
+                      onChange={(e) => setField(lot.id, "pick3", e.target.value.replace(/\D/g, ""))}
+                      placeholder="000"
+                      className="bg-zinc-900 border-white/10 h-11 mt-1 font-mono text-xl tracking-widest text-center focus:border-yellow-400"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">{t("pickFour")}</Label>
+                    <Input
+                      data-testid={`result-${state}-${session}-p4`}
+                      maxLength={4} disabled={!canEdit}
+                      value={d.pick4}
+                      onChange={(e) => setField(lot.id, "pick4", e.target.value.replace(/\D/g, ""))}
+                      placeholder="0000"
+                      className="bg-zinc-900 border-white/10 h-11 mt-1 font-mono text-xl tracking-widest text-center focus:border-yellow-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">
+                    BÒLÈT (3 boul)
+                  </Label>
+                  <div className="grid grid-cols-3 gap-2 mt-1">
+                    {[0, 1, 2].map((i) => (
+                      <Input
+                        key={i}
+                        data-testid={`result-${state}-${session}-boul-${i}`}
+                        maxLength={2} disabled={!canEdit}
+                        value={d.bolet[i] || ""}
+                        onChange={(e) => setField(lot.id, "bolet", e.target.value.replace(/\D/g, ""), i)}
+                        placeholder={["1ye", "2yèm", "3yèm"][i]}
+                        className={`bg-zinc-900 border-white/10 h-10 font-mono text-lg tracking-widest text-center focus:border-yellow-400 ${
+                          ["text-yellow-400", "text-green-400", "text-blue-400"][i]
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </Card>
+            );
+          })
+        ))}
+      </div>
     </div>
   );
 }

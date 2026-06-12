@@ -4,10 +4,10 @@ import { useApp } from "@/lib/context";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, ScanLine, Trophy, X } from "lucide-react";
+import { Search, ScanLine, Trophy, X, Printer } from "lucide-react";
 import { toast } from "sonner";
 import TicketPrint from "@/components/TicketPrint";
-import { GAMES, PLAY_TYPE_LABELS } from "@/lib/i18n";
+import { GAME_LABELS } from "@/lib/i18n";
 
 export default function Verify() {
   const { t, formatMoney, user } = useApp();
@@ -31,7 +31,8 @@ export default function Verify() {
     try {
       const { data } = await api.post(`/tickets/${ticket.ticket_number}/pay`);
       toast.success(`${t("payoutSuccess")} - ${formatMoney(data.amount, ticket.currency)}`);
-      verify();
+      const { data: refresh } = await api.get(`/tickets/${ticket.ticket_number}`);
+      setTicket(refresh);
     } catch (err) {
       toast.error(err.response?.data?.detail || t("error"));
     }
@@ -40,11 +41,11 @@ export default function Verify() {
   const canPay = ["super_admin", "admin", "machann"].includes(user?.role);
 
   return (
-    <div className="space-y-6" data-testid="verify-page">
-      <h1 className="text-4xl font-black tracking-tighter">{t("verify")}</h1>
+    <div className="space-y-4 lg:space-y-6" data-testid="verify-page">
+      <h1 className="text-2xl sm:text-4xl font-black tracking-tighter">{t("verify")}</h1>
 
-      <Card className="bg-[#121214] border-white/5 p-5">
-        <form onSubmit={verify} className="flex gap-2">
+      <Card className="bg-[#121214] border-white/5 p-4 sm:p-5">
+        <form onSubmit={verify} className="flex flex-col sm:flex-row gap-2">
           <div className="relative flex-1">
             <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-yellow-400" />
             <Input
@@ -53,7 +54,7 @@ export default function Verify() {
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t("searchTicket") + " (TL...)"}
               data-testid="verify-input"
-              className="bg-zinc-900 border-white/10 pl-10 h-12 font-mono text-lg uppercase"
+              className="bg-zinc-900 border-white/10 pl-10 h-12 font-mono text-base uppercase"
             />
           </div>
           <Button data-testid="verify-submit" type="submit" className="bg-yellow-400 hover:bg-yellow-500 text-black font-bold px-8 glow-gold">
@@ -63,25 +64,27 @@ export default function Verify() {
       </Card>
 
       {ticket && (
-        <Card className="bg-[#121214] border-white/5 p-6 space-y-5 slide-up" data-testid="verify-result">
-          <div className="flex items-start justify-between border-b border-white/5 pb-4">
+        <Card className="bg-[#121214] border-white/5 p-4 sm:p-6 space-y-5 slide-up" data-testid="verify-result">
+          <div className="flex items-start justify-between gap-3 border-b border-white/5 pb-4 flex-wrap">
             <div>
-              <div className="text-xs uppercase tracking-wider text-zinc-500">{t("ticketNo")}</div>
-              <div className="text-3xl font-mono font-bold text-yellow-400 mt-1">{ticket.ticket_number}</div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500">{t("ticketNo")}</div>
+              <div className="text-2xl sm:text-3xl font-mono font-bold text-yellow-400 mt-1">{ticket.ticket_number}</div>
               <div className="text-sm text-zinc-400 mt-2">{ticket.lottery_name} • {ticket.draw_date}</div>
             </div>
-            <div className="text-right">
+            <div>
               {ticket.has_result ? (
                 ticket.payout_amount > 0 ? (
                   <div className="px-4 py-2 bg-green-500/10 border border-green-500/30 rounded-lg">
-                    <div className="flex items-center gap-2 text-green-400 font-bold">
+                    <div className="flex items-center gap-2 text-green-400 font-bold text-sm">
                       <Trophy className="w-4 h-4" /> {t("winning")}
                     </div>
-                    <div className="text-2xl font-mono font-bold text-green-400 mt-1">{formatMoney(ticket.payout_amount, ticket.currency)}</div>
+                    <div className="text-xl sm:text-2xl font-mono font-bold text-green-400 mt-1">
+                      {formatMoney(ticket.payout_amount, ticket.currency)}
+                    </div>
                   </div>
                 ) : (
-                  <div className="px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 font-bold flex items-center gap-2">
-                    <X className="w-4 h-4" /> No win
+                  <div className="px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 font-bold flex items-center gap-2 text-sm">
+                    <X className="w-4 h-4" /> {t("notMatched")}
                   </div>
                 )
               ) : (
@@ -90,12 +93,51 @@ export default function Verify() {
             </div>
           </div>
 
+          {/* Display drawn numbers */}
+          {ticket.has_result && ticket.result && (
+            <div className="bg-zinc-900/40 border border-white/5 rounded-md p-3 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+              {ticket.result.bolet?.filter(Boolean).length > 0 && (
+                <div className="col-span-2 sm:col-span-2">
+                  <div className="text-[10px] uppercase text-zinc-500 mb-1 font-bold">BÒLÈT</div>
+                  <div className="flex gap-1 flex-wrap">
+                    {(ticket.result.bolet || []).map((b, i) => b && (
+                      <span key={i} className={`font-mono px-2 py-1 rounded border ${
+                        ["bg-yellow-400/10 text-yellow-400 border-yellow-400/30",
+                         "bg-green-500/10 text-green-400 border-green-500/30",
+                         "bg-blue-500/10 text-blue-400 border-blue-500/30"][i]
+                      }`}>
+                        {["1ye", "2yèm", "3yèm"][i]}: <b>{b}</b>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {ticket.result.pick3 && (
+                <div>
+                  <div className="text-[10px] uppercase text-zinc-500 mb-1 font-bold">PICK 3</div>
+                  <div className="font-mono text-base font-bold">{ticket.result.pick3}</div>
+                </div>
+              )}
+              {ticket.result.pick4 && (
+                <div>
+                  <div className="text-[10px] uppercase text-zinc-500 mb-1 font-bold">PICK 4</div>
+                  <div className="font-mono text-base font-bold">{ticket.result.pick4}</div>
+                </div>
+              )}
+              {ticket.result.pick5 && (
+                <div>
+                  <div className="text-[10px] uppercase text-zinc-500 mb-1 font-bold">PICK 5</div>
+                  <div className="font-mono text-base font-bold">{ticket.result.pick5}</div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-xs uppercase tracking-wider text-zinc-500 font-bold">
                 <tr>
                   <th className="text-left py-2">{t("game")}</th>
-                  <th className="text-left py-2">{t("playType")}</th>
                   <th className="text-center py-2">{t("number")}</th>
                   <th className="text-right py-2">{t("amount")}</th>
                   <th className="text-right py-2">{t("payout")}</th>
@@ -104,9 +146,20 @@ export default function Verify() {
               <tbody>
                 {ticket.items.map((it, i) => (
                   <tr key={i} className={`border-t border-white/5 ${it.winning ? "bg-green-500/5" : ""}`}>
-                    <td className="py-2.5 font-bold">{GAMES.find((g) => g.value === it.game)?.label}</td>
-                    <td className="py-2.5 text-zinc-400">{PLAY_TYPE_LABELS[it.play_type]}</td>
-                    <td className="py-2.5 text-center font-mono font-bold text-yellow-400 tracking-widest">{it.number}</td>
+                    <td className="py-2.5 font-bold">{GAME_LABELS[it.game]}</td>
+                    <td className="py-2.5 text-center">
+                      <span className={`font-mono font-bold tracking-widest ${
+                        it.winning ? "text-green-400" : "text-yellow-400"
+                      }`}>{it.number}</span>
+                      {it.winning && it.game === "bolet" && (
+                        <span className="ml-2 text-[10px] uppercase font-bold text-green-400">
+                          ★ {["", "1ye", "2yèm", "3yèm"][it.win_position]}
+                        </span>
+                      )}
+                      {it.winning && it.game === "mariage" && (
+                        <span className="ml-2 text-[10px] uppercase font-bold text-pink-400">★ {t("matched")}</span>
+                      )}
+                    </td>
                     <td className="py-2.5 text-right font-mono">{formatMoney(it.amount, ticket.currency)}</td>
                     <td className={`py-2.5 text-right font-mono font-bold ${it.payout ? "text-green-400" : "text-zinc-600"}`}>
                       {it.payout ? formatMoney(it.payout, ticket.currency) : "—"}
@@ -117,14 +170,14 @@ export default function Verify() {
             </table>
           </div>
 
-          <div className="flex gap-2 pt-3 border-t border-white/5">
+          <div className="flex flex-col sm:flex-row gap-2 pt-3 border-t border-white/5">
             <Button
               onClick={() => setShowPrint(true)}
               variant="outline"
               data-testid="verify-reprint"
               className="bg-zinc-900 border-white/10 hover:bg-zinc-800"
             >
-              {t("printTicket")}
+              <Printer className="w-4 h-4 mr-2" /> {t("printTicket")}
             </Button>
             {ticket.payout_amount > 0 && !ticket.paid && canPay && (
               <Button
@@ -136,8 +189,8 @@ export default function Verify() {
               </Button>
             )}
             {ticket.paid && (
-              <div className="flex-1 px-4 py-2 bg-zinc-800 rounded-md text-center text-green-400 font-bold uppercase tracking-wider text-sm">
-                {t("paid")}
+              <div className="flex-1 px-4 py-2 bg-green-500/10 rounded-md text-center text-green-400 font-bold uppercase tracking-wider text-sm border border-green-500/20">
+                ✓ {t("paid")}
               </div>
             )}
           </div>

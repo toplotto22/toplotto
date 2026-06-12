@@ -129,10 +129,13 @@ export default function Dashboard() {
                     <div className="text-xs text-zinc-400 uppercase tracking-wider font-bold">{r.draw_date}</div>
                   </div>
                   <div className="flex gap-2 flex-wrap">
-                    {(r.pick3 || []).filter(Boolean).map((n, i) => (
-                      <span key={i} className="font-mono text-sm bg-yellow-400/10 text-yellow-400 px-2 py-1 rounded border border-yellow-400/20">P3: {n}</span>
-                    ))}
-                    {(r.bolet || []).filter(Boolean).map((n, i) => (
+                    {r.pick3 ? (
+                      <span className="font-mono text-sm bg-yellow-400/10 text-yellow-400 px-2 py-1 rounded border border-yellow-400/20">P3: {r.pick3}</span>
+                    ) : null}
+                    {r.pick4 ? (
+                      <span className="font-mono text-sm bg-yellow-400/10 text-yellow-400 px-2 py-1 rounded border border-yellow-400/20">P4: {r.pick4}</span>
+                    ) : null}
+                    {(Array.isArray(r.bolet) ? r.bolet : []).filter(Boolean).map((n, i) => (
                       <span key={i} className="font-mono text-sm bg-green-500/10 text-green-400 px-2 py-1 rounded border border-green-500/20">BL: {n}</span>
                     ))}
                   </div>

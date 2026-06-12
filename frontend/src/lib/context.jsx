@@ -60,12 +60,17 @@ export const AppProvider = ({ children }) => {
     }
   }, [user]);
 
-  const formatMoney = (amt, cur) => {
-    const useCur = cur || currency;
-    const symbol = useCur === "HTG" ? "G" : "R$";
+  const formatMoney = (amt, sourceCurrency) => {
+    const src = sourceCurrency || currency;
+    const dst = currency;
     const rate = settings?.exchange_rate_brl_to_htg || 25;
     let v = Number(amt) || 0;
-    // We store amounts in the currency they were created; for display we keep currency tag explicit
+    // Real conversion if source differs from display
+    if (src !== dst) {
+      if (src === "BRL" && dst === "HTG") v = v * rate;
+      else if (src === "HTG" && dst === "BRL") v = v / rate;
+    }
+    const symbol = dst === "HTG" ? "G" : "R$";
     return `${symbol} ${v.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 

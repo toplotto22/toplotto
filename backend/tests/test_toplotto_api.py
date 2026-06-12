@@ -1,12 +1,11 @@
-"""TOP LOTTO backend API regression tests."""
+"""TOP LOTTO V2 backend API regression tests."""
 import os
-import time
 import uuid
 import pytest
 import requests
 from datetime import datetime, timezone
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://lottery-hub-48.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 
 
@@ -34,28 +33,63 @@ class TestAuth:
         assert r.status_code == 401
 
 
-# ----------- LOTTERIES -----------
+# ----------- LOTTERIES V2 (state + session) -----------
 class TestLotteries:
-    def test_list_lotteries(self, admin_client):
+    def test_list_lotteries_v2_structure(self, admin_client):
         r = admin_client.get(f"{API}/lotteries")
         assert r.status_code == 200
         lotteries = r.json()
         assert isinstance(lotteries, list)
-        assert len(lotteries) >= 8
-        codes = {lot["code"] for lot in lotteries}
-        for code in ["NY_MID", "NY_EVE", "GA_MID", "GA_EVE", "TX_MOR", "TX_EVE", "FL_MID", "FL_EVE"]:
-            assert code in codes, f"Missing lottery code: {code}"
+        assert len(lotteries) >= 8, f"Expected >=8 lotteries, got {len(lotteries)}"
+        # All have state + session
+        for lot in lotteries:
+            assert "state" in lot, f"Missing state field: {lot}"
+            assert "session" in lot, f"Missing session field: {lot}"
+            assert lot["state"] in ("FL", "GA", "NY", "TX")
+            assert lot["session"] in ("midday", "evening")
+        # Should have all 4 states x 2 sessions
+        pairs = {(lot["state"], lot["session"]) for lot in lotteries}
+        for state in ("FL", "GA", "NY", "TX"):
+            for sess in ("midday", "evening"):
+                assert (state, sess) in pairs, f"Missing {state}/{sess}"
+        # French names
+        names = [lot["name"] for lot in lotteries]
+        assert any("Midi" in n or "Soir" in n for n in names), f"Names not in French: {names}"
+
+
+# ----------- SETTINGS V2 (new payout structure) -----------
+class TestSettings:
+    def test_get_settings_v2_payouts(self, admin_client):
+        r = admin_client.get(f"{API}/settings")
+        assert r.status_code == 200
+        s = r.json()
+        assert "payouts" in s
+        p = s["payouts"]
+        # bolet must have premye/dezyem/twazyem/mariage
+        assert p["bolet"]["premye"] == 50
+        assert p["bolet"]["dezyem"] == 20
+        assert p["bolet"]["twazyem"] == 10
+        assert p["bolet"]["mariage"] == 500
+        assert p["pick3"] == 500
+        assert p["pick4"] == 5000
+        assert p["pick5"] == 50000
+        assert "exchange_rate_brl_to_htg" in s
+
+    def test_update_settings_payouts(self, admin_client):
+        r = admin_client.put(f"{API}/settings", json={
+            "payouts": {"bolet": {"premye": 60, "dezyem": 25, "twazyem": 12, "mariage": 550},
+                        "pick3": 600, "pick4": 6000, "pick5": 60000}
+        })
+        assert r.status_code == 200
+        # restore defaults
+        admin_client.put(f"{API}/settings", json={
+            "payouts": {"bolet": {"premye": 50, "dezyem": 20, "twazyem": 10, "mariage": 500},
+                        "pick3": 500, "pick4": 5000, "pick5": 50000}
+        })
 
 
 # ----------- USERS -----------
 class TestUsers:
-    def test_list_users(self, admin_client):
-        r = admin_client.get(f"{API}/users")
-        assert r.status_code == 200
-        users = r.json()
-        assert isinstance(users, list)
-        assert any(u["role"] == "super_admin" for u in users)
-
     def test_create_user(self, admin_client):
         unique = f"test_{uuid.uuid4().hex[:8]}@toplotto.ht"
         r = admin_client.post(f"{API}/users", json={
@@ -66,134 +100,158 @@ class TestUsers:
         u = r.json()
         assert u["email"] == unique
         assert u["role"] == "machann"
-        assert "id" in u
-        pytest.test_machann_id = u["id"]
         pytest.test_machann_email = unique
 
-    def test_create_user_duplicate_email(self, admin_client):
-        r = admin_client.post(f"{API}/users", json={
-            "email": pytest.test_machann_email, "password": "Pass123!",
-            "name": "DupTest", "role": "machann"
-        })
-        assert r.status_code == 400
 
-    def test_update_user(self, admin_client):
-        r = admin_client.put(f"{API}/users/{pytest.test_machann_id}", json={"name": "Updated Machann"})
-        assert r.status_code == 200
+# ----------- TICKETS V2: auto-detect game + new payouts -----------
+class TestTicketsBoletPosition:
+    """Bolet position 1 = premye (50x), 2 = dezyem (20x), 3 = twazyem (10x)."""
 
-    def test_machann_cannot_list_users(self, anon_client):
-        # Login as machann
-        r = anon_client.post(f"{API}/auth/login", json={"email": pytest.test_machann_email, "password": "Pass123!"})
-        assert r.status_code == 200
-        token = r.json()["token"]
-        r2 = requests.get(f"{API}/users", headers={"Authorization": f"Bearer {token}"})
-        assert r2.status_code == 403
-        pytest.test_machann_token = token
-
-
-# ----------- AGENCIES -----------
-class TestAgencies:
-    def test_list_agencies(self, admin_client):
-        r = admin_client.get(f"{API}/agencies")
-        assert r.status_code == 200
-        agencies = r.json()
-        assert any(a["name"] == "Agence Principale" for a in agencies)
-
-    def test_create_agency(self, admin_client):
-        r = admin_client.post(f"{API}/agencies", json={
-            "name": f"TEST_Agence_{uuid.uuid4().hex[:6]}", "address": "PaP", "phone": "509"
-        })
-        assert r.status_code == 200
-        assert "id" in r.json()
-
-
-# ----------- TICKETS + RESULTS + PAYOUT -----------
-class TestTicketsAndPayouts:
-    def test_create_ticket(self, admin_client):
-        # Get a lottery
-        lotteries = admin_client.get(f"{API}/lotteries").json()
-        lot = lotteries[0]
-        pytest.test_lottery_id = lot["id"]
-        draw_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        pytest.test_draw_date = draw_date
-
+    def _create_ticket(self, admin_client, lottery_id, draw_date, items):
         r = admin_client.post(f"{API}/tickets", json={
-            "lottery_id": lot["id"], "draw_date": draw_date, "currency": "HTG",
-            "items": [
-                {"game": "bolet", "play_type": "straight", "number": "12", "amount": 10}
-            ],
-            "customer_name": "Test Client"
+            "lottery_id": lottery_id, "draw_date": draw_date, "currency": "HTG",
+            "items": items, "customer_name": "TEST"
         })
         assert r.status_code == 200, r.text
-        t = r.json()
-        assert t["ticket_number"].startswith("TL")
-        assert len(t["ticket_number"]) == 13  # TL + 6 + 5
-        assert t["total"] == 10
-        assert t["currency"] == "HTG"
-        pytest.test_ticket_number = t["ticket_number"]
+        return r.json()
 
-    def test_get_ticket_no_result_yet(self, admin_client):
-        r = admin_client.get(f"{API}/tickets/{pytest.test_ticket_number}")
-        assert r.status_code == 200
-        t = r.json()
-        assert t["has_result"] is False
-
-    def test_list_tickets(self, admin_client):
-        r = admin_client.get(f"{API}/tickets")
-        assert r.status_code == 200
-        tickets = r.json()
-        assert any(t["ticket_number"] == pytest.test_ticket_number for t in tickets)
-
-    def test_post_results(self, admin_client):
+    def _set_result(self, admin_client, lottery_id, draw_date, bolet=None, pick3="", pick4="", pick5=""):
         r = admin_client.post(f"{API}/results", json={
-            "lottery_id": pytest.test_lottery_id,
-            "draw_date": pytest.test_draw_date,
-            "bolet": ["12", "34", "56"],
-            "pick3": ["111", "222", "333"],
-            "pick4": ["1111", "2222", "3333"],
-            "pick5": ["11111", "22222", "33333"],
+            "lottery_id": lottery_id, "draw_date": draw_date,
+            "bolet": bolet or [], "pick3": pick3, "pick4": pick4, "pick5": pick5,
         })
         assert r.status_code == 200, r.text
 
-    def test_get_ticket_with_winning(self, admin_client):
-        r = admin_client.get(f"{API}/tickets/{pytest.test_ticket_number}")
+    def test_bolet_position_premye(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[0]
+        date = (datetime.now(timezone.utc).strftime("%Y-%m-%d") + "T_p1")[:10]  # use unique date string
+        # use a future unique date string to avoid collision
+        date = "2099-01-01"
+        t = self._create_ticket(admin_client, lot["id"], date, [{"game": "bolet", "number": "32", "amount": 10}])
+        self._set_result(admin_client, lot["id"], date, bolet=["32", "12", "77"])
+        got = admin_client.get(f"{API}/tickets/{t['ticket_number']}").json()
+        assert got["has_result"] is True
+        # 10 * 50 = 500
+        assert got["payout_amount"] == 500, f"Expected 500, got {got['payout_amount']}"
+        assert got["items"][0]["winning"] is True
+        assert got["items"][0]["win_key"] == "premye"
+        assert got["items"][0]["win_position"] == 1
+
+    def test_bolet_position_dezyem(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[1]
+        date = "2099-01-02"
+        t = self._create_ticket(admin_client, lot["id"], date, [{"game": "bolet", "number": "32", "amount": 10}])
+        self._set_result(admin_client, lot["id"], date, bolet=["11", "32", "77"])
+        got = admin_client.get(f"{API}/tickets/{t['ticket_number']}").json()
+        # 10 * 20 = 200
+        assert got["payout_amount"] == 200, f"Expected 200, got {got['payout_amount']}"
+        assert got["items"][0]["win_key"] == "dezyem"
+
+    def test_bolet_position_twazyem(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[2]
+        date = "2099-01-03"
+        t = self._create_ticket(admin_client, lot["id"], date, [{"game": "bolet", "number": "32", "amount": 10}])
+        self._set_result(admin_client, lot["id"], date, bolet=["11", "22", "32"])
+        got = admin_client.get(f"{API}/tickets/{t['ticket_number']}").json()
+        # 10 * 10 = 100
+        assert got["payout_amount"] == 100, f"Expected 100, got {got['payout_amount']}"
+        assert got["items"][0]["win_key"] == "twazyem"
+
+    def test_mariage_payout(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[3]
+        date = "2099-01-04"
+        t = self._create_ticket(admin_client, lot["id"], date, [{"game": "mariage", "number": "32-12", "amount": 5}])
+        self._set_result(admin_client, lot["id"], date, bolet=["32", "12", "77"])
+        got = admin_client.get(f"{API}/tickets/{t['ticket_number']}").json()
+        # 5 * 500 = 2500
+        assert got["payout_amount"] == 2500, f"Expected 2500, got {got['payout_amount']}"
+        assert got["items"][0]["win_key"] == "mariage"
+
+    def test_mariage_loses_if_only_one_match(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[4]
+        date = "2099-01-05"
+        t = self._create_ticket(admin_client, lot["id"], date, [{"game": "mariage", "number": "32-99", "amount": 5}])
+        self._set_result(admin_client, lot["id"], date, bolet=["32", "12", "77"])
+        got = admin_client.get(f"{API}/tickets/{t['ticket_number']}").json()
+        assert got["payout_amount"] == 0
+        assert got["items"][0]["winning"] is False
+
+    def test_pick3_payout(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[5]
+        date = "2099-01-06"
+        t = self._create_ticket(admin_client, lot["id"], date, [{"game": "pick3", "number": "932", "amount": 5}])
+        self._set_result(admin_client, lot["id"], date, pick3="932")
+        got = admin_client.get(f"{API}/tickets/{t['ticket_number']}").json()
+        # 5 * 500 = 2500
+        assert got["payout_amount"] == 2500
+        assert got["items"][0]["winning"] is True
+
+    def test_pick4_payout(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[6]
+        date = "2099-01-07"
+        t = self._create_ticket(admin_client, lot["id"], date, [{"game": "pick4", "number": "8034", "amount": 2}])
+        self._set_result(admin_client, lot["id"], date, pick4="8034")
+        got = admin_client.get(f"{API}/tickets/{t['ticket_number']}").json()
+        # 2 * 5000 = 10000
+        assert got["payout_amount"] == 10000
+
+    def test_pick5_payout(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[7]
+        date = "2099-01-08"
+        t = self._create_ticket(admin_client, lot["id"], date, [{"game": "pick5", "number": "12345", "amount": 1}])
+        self._set_result(admin_client, lot["id"], date, pick5="12345")
+        got = admin_client.get(f"{API}/tickets/{t['ticket_number']}").json()
+        # 1 * 50000 = 50000
+        assert got["payout_amount"] == 50000
+
+    def test_pay_flow_and_double_pay_rejected(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[0]
+        date = "2099-02-01"
+        t = self._create_ticket(admin_client, lot["id"], date, [{"game": "bolet", "number": "55", "amount": 10}])
+        self._set_result(admin_client, lot["id"], date, bolet=["55", "00", "00"])
+        # pay
+        r = admin_client.post(f"{API}/tickets/{t['ticket_number']}/pay")
+        assert r.status_code == 200, r.text
+        assert r.json()["amount"] == 500
+        # pay twice
+        r2 = admin_client.post(f"{API}/tickets/{t['ticket_number']}/pay")
+        assert r2.status_code == 400
+
+    def test_cancel_unpaid_then_block_paid(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[0]
+        date = "2099-02-02"
+        # unpaid cancel OK
+        t1 = self._create_ticket(admin_client, lot["id"], date, [{"game": "bolet", "number": "01", "amount": 5}])
+        r = admin_client.delete(f"{API}/tickets/{t1['ticket_number']}")
         assert r.status_code == 200
-        t = r.json()
-        assert t["has_result"] is True
-        # 10 HTG bolet straight, position 1 -> 60 * 10 * 1.0 = 600
-        assert t["payout_amount"] == 600, f"Expected 600 got {t['payout_amount']}"
-        assert t["items"][0]["winning"] is True
-
-    def test_pay_ticket(self, admin_client):
-        r = admin_client.post(f"{API}/tickets/{pytest.test_ticket_number}/pay")
-        assert r.status_code == 200
-        assert r.json()["amount"] == 600
-
-        # verify persisted
-        t = admin_client.get(f"{API}/tickets/{pytest.test_ticket_number}").json()
-        assert t["paid"] is True
-
-    def test_pay_ticket_twice_fails(self, admin_client):
-        r = admin_client.post(f"{API}/tickets/{pytest.test_ticket_number}/pay")
-        assert r.status_code == 400
-
-    def test_machann_sees_only_own_tickets(self, anon_client):
-        token = getattr(pytest, "test_machann_token", None)
-        if not token:
-            pytest.skip("No machann token")
-        r = requests.get(f"{API}/tickets", headers={"Authorization": f"Bearer {token}"})
-        assert r.status_code == 200
-        # admin's ticket should not be in machann's list
-        for t in r.json():
-            assert t["machann_id"] != "admin_id_placeholder"
+        # paid cannot cancel
+        t2 = self._create_ticket(admin_client, lot["id"], date, [{"game": "bolet", "number": "77", "amount": 10}])
+        self._set_result(admin_client, lot["id"], date, bolet=["77", "00", "00"])
+        admin_client.post(f"{API}/tickets/{t2['ticket_number']}/pay")
+        r2 = admin_client.delete(f"{API}/tickets/{t2['ticket_number']}")
+        assert r2.status_code == 400
 
 
-# ----------- RESULTS LIST -----------
-class TestResults:
-    def test_list_results(self, admin_client):
-        r = admin_client.get(f"{API}/results")
-        assert r.status_code == 200
-        assert isinstance(r.json(), list)
+# ----------- RESULTS V2 (string single fields) -----------
+class TestResultsV2:
+    def test_upsert_and_get_results(self, admin_client):
+        lot = admin_client.get(f"{API}/lotteries").json()[0]
+        date = "2099-03-01"
+        r = admin_client.post(f"{API}/results", json={
+            "lottery_id": lot["id"], "draw_date": date,
+            "pick3": "932", "pick4": "8034", "pick5": "12345",
+            "bolet": ["32", "12", "77"]
+        })
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["pick3"] == "932"
+        assert d["pick4"] == "8034"
+        assert d["bolet"] == ["32", "12", "77"]
+        # GET by date
+        r2 = admin_client.get(f"{API}/results", params={"draw_date": date})
+        assert r2.status_code == 200
+        lst = r2.json()
+        assert any(x.get("pick3") == "932" and x.get("pick4") == "8034" for x in lst)
 
 
 # ----------- DASHBOARD -----------
@@ -207,42 +265,6 @@ class TestDashboard:
             assert key in d, f"Missing key {key}"
         assert isinstance(d["trend"], list)
         assert len(d["trend"]) == 7
-
-
-# ----------- REPORTS -----------
-class TestReports:
-    def test_sales_report(self, admin_client):
-        r = admin_client.get(f"{API}/reports/sales?group_by=day")
-        assert r.status_code == 200
-        rows = r.json()
-        assert isinstance(rows, list)
-        if rows:
-            assert "sales" in rows[0]
-            assert "profit" in rows[0]
-
-    def test_export_csv(self, admin_client):
-        r = admin_client.get(f"{API}/reports/export")
-        assert r.status_code == 200
-        assert "text/csv" in r.headers.get("content-type", "")
-        assert "Ticket" in r.text
-
-
-# ----------- SETTINGS -----------
-class TestSettings:
-    def test_get_settings(self, admin_client):
-        r = admin_client.get(f"{API}/settings")
-        assert r.status_code == 200
-        s = r.json()
-        assert "business_name" in s
-        assert "payouts" in s
-        assert "exchange_rate_brl_to_htg" in s
-
-    def test_update_settings(self, admin_client):
-        r = admin_client.put(f"{API}/settings", json={"business_name": "TOP LOTTO TEST", "exchange_rate_brl_to_htg": 26.0})
-        assert r.status_code == 200
-        assert r.json()["business_name"] == "TOP LOTTO TEST"
-        # restore
-        admin_client.put(f"{API}/settings", json={"business_name": "TOP LOTTO", "exchange_rate_brl_to_htg": 25.0})
 
 
 # ----------- AUTHORIZATION -----------

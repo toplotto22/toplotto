@@ -1,13 +1,14 @@
 """
 TOP LOTTO - Backend API
-Single-file FastAPI application managing lottery operations.
+Auto-detect game by digit count. Bòlèt with mariage. Position-based payouts (premye/dezyèm/twazyèm).
 """
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 import os
 import logging
 import uuid
@@ -19,7 +20,6 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 import jwt as pyjwt
 import bcrypt
-from itertools import permutations
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -41,35 +41,34 @@ logging.basicConfig(level=logging.INFO)
 
 
 # ---------- Utils ----------
-def now_iso() -> str:
+def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def gen_id() -> str:
+def gen_id():
     return str(uuid.uuid4())
 
 
-def hash_password(pw: str) -> str:
+def hash_password(pw):
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
 
-def verify_password(pw: str, hashed: str) -> bool:
+def verify_password(pw, hashed):
     try:
         return bcrypt.checkpw(pw.encode(), hashed.encode())
     except Exception:
         return False
 
 
-def create_token(user_id: str, role: str) -> str:
+def create_token(user_id, role):
     payload = {
-        "sub": user_id,
-        "role": role,
+        "sub": user_id, "role": role,
         "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
     }
     return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
 
 
-async def current_user(creds: HTTPAuthorizationCredentials = Depends(auth_scheme)) -> Dict[str, Any]:
+async def current_user(creds: HTTPAuthorizationCredentials = Depends(auth_scheme)):
     if not creds:
         raise HTTPException(401, "Missing token")
     try:
@@ -90,10 +89,10 @@ def require_roles(*roles):
     return checker
 
 
-async def audit(user_id: str, action: str, details: Dict = None):
+async def audit(user_id, action, details=None):
     await db.audit_logs.insert_one({
         "id": gen_id(), "user_id": user_id, "action": action,
-        "details": details or {}, "timestamp": now_iso()
+        "details": details or {}, "timestamp": now_iso(),
     })
 
 
@@ -107,7 +106,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     name: str
-    role: str  # super_admin, directeur, superviseur, admin, sous_admin, machann
+    role: str
     agency_id: Optional[str] = None
     phone: Optional[str] = None
 
@@ -131,16 +130,15 @@ class AgencyCreate(BaseModel):
 
 
 class TicketItem(BaseModel):
-    game: str  # bolet, pick3, pick4, pick5
-    play_type: str  # straight, box, straight_box, combo
-    number: str
+    game: str  # bolet, pick3, pick4, pick5, mariage
+    number: str  # for mariage use "AA-BB" format
     amount: float
 
 
 class TicketCreate(BaseModel):
     lottery_id: str
-    draw_date: str  # YYYY-MM-DD
-    currency: str  # HTG | BRL
+    draw_date: str
+    currency: str
     items: List[TicketItem]
     customer_name: Optional[str] = ""
 
@@ -148,10 +146,10 @@ class TicketCreate(BaseModel):
 class ResultCreate(BaseModel):
     lottery_id: str
     draw_date: str
-    pick3: Optional[List[str]] = None  # [r1, r2, r3]
-    pick4: Optional[List[str]] = None
-    pick5: Optional[List[str]] = None
-    bolet: Optional[List[str]] = None  # 3 winning 2-digit numbers
+    pick3: Optional[str] = ""
+    pick4: Optional[str] = ""
+    pick5: Optional[str] = ""
+    bolet: Optional[List[str]] = None  # [premye, dezyem, twazyem]
 
 
 class SettingsUpdate(BaseModel):
@@ -165,7 +163,7 @@ class SettingsUpdate(BaseModel):
     limits: Optional[Dict[str, Any]] = None
 
 
-# ---------- Routes: Auth ----------
+# ---------- Auth ----------
 @api.post("/auth/login")
 async def login(data: LoginInput):
     user = await db.users.find_one({"email": data.email.lower()})
@@ -186,11 +184,10 @@ async def me(user=Depends(current_user)):
     return user
 
 
-# ---------- Routes: Users (admin) ----------
+# ---------- Users ----------
 @api.get("/users")
 async def list_users(user=Depends(require_roles("super_admin", "admin", "directeur", "superviseur"))):
-    users = await db.users.find({}, {"_id": 0, "password": 0}).to_list(1000)
-    return users
+    return await db.users.find({}, {"_id": 0, "password": 0}).to_list(1000)
 
 
 @api.post("/users")
@@ -203,8 +200,9 @@ async def create_user(data: UserCreate, user=Depends(require_roles("super_admin"
         "phone": data.phone, "active": True, "created_at": now_iso(),
     }
     await db.users.insert_one(doc)
-    await audit(user["id"], "user.create", {"target": doc["id"], "role": data.role})
-    doc.pop("_id", None); doc.pop("password", None)
+    await audit(user["id"], "user.create", {"target": doc["id"]})
+    doc.pop("_id", None)
+    doc.pop("password", None)
     return doc
 
 
@@ -227,7 +225,7 @@ async def delete_user(user_id: str, user=Depends(require_roles("super_admin"))):
     return {"ok": True}
 
 
-# ---------- Routes: Agencies ----------
+# ---------- Agencies ----------
 @api.get("/agencies")
 async def list_agencies(user=Depends(current_user)):
     return await db.agencies.find({}, {"_id": 0}).to_list(1000)
@@ -248,65 +246,61 @@ async def update_agency(aid: str, data: AgencyCreate, user=Depends(require_roles
     return {"ok": True}
 
 
-# ---------- Routes: Lotteries & Draws ----------
+# ---------- Lotteries ----------
 @api.get("/lotteries")
 async def list_lotteries(user=Depends(current_user)):
-    return await db.lotteries.find({}, {"_id": 0}).to_list(100)
+    return await db.lotteries.find({}, {"_id": 0}).sort([("state", 1), ("session", 1)]).to_list(100)
 
 
-# ---------- Routes: Tickets ----------
-def calc_item_total(item: TicketItem) -> float:
-    """Combo multiplies amount by permutations."""
-    if item.play_type == "combo":
-        digits = list(item.number)
-        return item.amount * len(set([''.join(p) for p in permutations(digits)]))
-    return item.amount
-
-
-def check_win(item: dict, results: dict) -> tuple:
-    """Returns (won: bool, multiplier_position: int, payout_mode: str)"""
+# ---------- Payout calculation ----------
+def check_win(item, results):
+    """
+    Returns (won, position, payout_key).
+    - bolet: matches one of 3 boul → position 1/2/3 → premye/dezyem/twazyem
+    - mariage: 2 numbers must both be in the 3 boul → mariage rate
+    - pick3/4/5: exact match against single result
+    """
     game = item["game"]
-    # determine result list
-    key_map = {"bolet": "bolet", "pick3": "pick3", "pick4": "pick4", "pick5": "pick5"}
-    res_list = results.get(key_map.get(game)) or []
-    if not res_list:
-        return (False, 0, "")
-    num = item["number"]
-    play = item["play_type"]
-    for idx, winning in enumerate(res_list[:3]):
-        if not winning:
-            continue
-        if play == "straight":
-            if num == winning:
-                return (True, idx + 1, "straight")
-        elif play == "box":
-            if sorted(num) == sorted(winning):
-                return (True, idx + 1, "box")
-        elif play == "straight_box":
-            if num == winning:
-                return (True, idx + 1, "straight")
-            if sorted(num) == sorted(winning):
-                return (True, idx + 1, "box")
-        elif play == "combo":
-            if sorted(num) == sorted(winning):
-                return (True, idx + 1, "combo")
+    if game == "bolet":
+        boul = results.get("bolet") or []
+        for idx, b in enumerate(boul[:3]):
+            if b and item["number"] == b:
+                key = ["premye", "dezyem", "twazyem"][idx]
+                return (True, idx + 1, key)
+    elif game == "mariage":
+        boul = set(b for b in (results.get("bolet") or []) if b)
+        parts = (item.get("number") or "").split("-")
+        if len(parts) == 2 and all(p in boul for p in parts):
+            return (True, 0, "mariage")
+    elif game == "pick3":
+        if results.get("pick3") and item["number"] == results["pick3"]:
+            return (True, 1, "straight")
+    elif game == "pick4":
+        if results.get("pick4") and item["number"] == results["pick4"]:
+            return (True, 1, "straight")
+    elif game == "pick5":
+        if results.get("pick5") and item["number"] == results["pick5"]:
+            return (True, 1, "straight")
     return (False, 0, "")
 
 
-def compute_payout(item: dict, results: dict, payouts: dict) -> float:
-    won, pos, mode = check_win(item, results)
+def compute_payout(item, results, payouts_cfg):
+    won, pos, key = check_win(item, results)
     if not won:
         return 0.0
-    cfg = payouts.get(item["game"], {})
-    rate = float(cfg.get(mode, 0) or 0)
-    # position multiplier (winner 1 = 100%, 2 = 50%, 3 = 25%)
-    pos_mult = {1: 1.0, 2: 0.5, 3: 0.25}.get(pos, 0)
-    base_amount = float(item["amount"])
-    if mode == "combo":
-        return base_amount * rate * pos_mult
-    return base_amount * rate * pos_mult
+    game = item["game"]
+    cfg = payouts_cfg.get(game, {})
+    rate = 0.0
+    if game == "bolet":
+        rate = float(cfg.get(key, 0) or 0)
+    elif game == "mariage":
+        rate = float(payouts_cfg.get("bolet", {}).get("mariage", 0) or 0)
+    elif game in ("pick3", "pick4", "pick5"):
+        rate = float(cfg if isinstance(cfg, (int, float)) else cfg.get("straight", 0) or 0)
+    return float(item["amount"]) * rate
 
 
+# ---------- Tickets ----------
 @api.post("/tickets")
 async def create_ticket(data: TicketCreate, user=Depends(current_user)):
     lottery = await db.lotteries.find_one({"id": data.lottery_id}, {"_id": 0})
@@ -315,12 +309,10 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
     items = []
     total = 0.0
     for it in data.items:
-        line_total = calc_item_total(it)
+        line_total = float(it.amount)
         total += line_total
         items.append({**it.model_dump(), "line_total": line_total})
 
-    # ticket number
-    from pymongo import ReturnDocument
     seq_doc = await db.counters.find_one_and_update(
         {"id": "ticket_seq"}, {"$inc": {"value": 1}},
         upsert=True, return_document=ReturnDocument.AFTER,
@@ -329,21 +321,14 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
     ticket_number = f"TL{datetime.now().strftime('%y%m%d')}{seq:05d}"
 
     doc = {
-        "id": gen_id(),
-        "ticket_number": ticket_number,
-        "lottery_id": data.lottery_id,
-        "lottery_name": lottery["name"],
-        "draw_date": data.draw_date,
-        "currency": data.currency,
-        "items": items,
-        "total": total,
+        "id": gen_id(), "ticket_number": ticket_number,
+        "lottery_id": data.lottery_id, "lottery_name": lottery["name"],
+        "draw_date": data.draw_date, "currency": data.currency,
+        "items": items, "total": total,
         "customer_name": data.customer_name or "",
-        "machann_id": user["id"],
-        "machann_name": user["name"],
+        "machann_id": user["id"], "machann_name": user["name"],
         "agency_id": user.get("agency_id"),
-        "status": "active",
-        "payout_amount": 0.0,
-        "paid": False,
+        "status": "active", "payout_amount": 0.0, "paid": False,
         "created_at": now_iso(),
     }
     await db.tickets.insert_one(doc)
@@ -377,8 +362,7 @@ async def list_tickets(
             q["draw_date"]["$gte"] = date_from
         if date_to:
             q["draw_date"]["$lte"] = date_to
-    tickets = await db.tickets.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
-    return tickets
+    return await db.tickets.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
 
 
 @api.get("/tickets/{ticket_number}")
@@ -386,15 +370,18 @@ async def get_ticket(ticket_number: str, user=Depends(current_user)):
     t = await db.tickets.find_one({"ticket_number": ticket_number}, {"_id": 0})
     if not t:
         raise HTTPException(404, "Ticket introuvable")
-    # compute winning status if result exists
     result = await db.results.find_one({"lottery_id": t["lottery_id"], "draw_date": t["draw_date"]}, {"_id": 0})
     settings = await get_settings_doc()
-    payouts = settings.get("payouts", {})
+    payouts_cfg = settings.get("payouts", {})
+    t["result"] = result
     if result:
         total_win = 0.0
         for it in t["items"]:
-            payout = compute_payout(it, result, payouts)
-            it["winning"] = payout > 0
+            won, pos, key = check_win(it, result)
+            payout = compute_payout(it, result, payouts_cfg)
+            it["winning"] = won
+            it["win_position"] = pos
+            it["win_key"] = key
             it["payout"] = payout
             total_win += payout
         t["payout_amount"] = total_win
@@ -416,9 +403,7 @@ async def pay_ticket(ticket_number: str, user=Depends(require_roles("super_admin
         raise HTTPException(400, "Résultats non disponibles")
     settings = await get_settings_doc()
     payouts_cfg = settings.get("payouts", {})
-    total_win = 0.0
-    for it in t["items"]:
-        total_win += compute_payout(it, result, payouts_cfg)
+    total_win = sum(compute_payout(it, result, payouts_cfg) for it in t["items"])
     if total_win <= 0:
         raise HTTPException(400, "Ticket non gagnant")
     await db.tickets.update_one(
@@ -435,12 +420,17 @@ async def pay_ticket(ticket_number: str, user=Depends(require_roles("super_admin
 
 @api.delete("/tickets/{ticket_number}")
 async def cancel_ticket(ticket_number: str, user=Depends(require_roles("super_admin", "admin"))):
+    t = await db.tickets.find_one({"ticket_number": ticket_number})
+    if not t:
+        raise HTTPException(404, "Ticket introuvable")
+    if t.get("paid"):
+        raise HTTPException(400, "Ticket déjà payé - annulation impossible")
     await db.tickets.update_one({"ticket_number": ticket_number}, {"$set": {"status": "cancelled"}})
     await audit(user["id"], "ticket.cancel", {"ticket": ticket_number})
     return {"ok": True}
 
 
-# ---------- Routes: Results ----------
+# ---------- Results ----------
 @api.get("/results")
 async def list_results(
     lottery_id: Optional[str] = None,
@@ -452,15 +442,15 @@ async def list_results(
         q["lottery_id"] = lottery_id
     if draw_date:
         q["draw_date"] = draw_date
-    return await db.results.find(q, {"_id": 0}).sort("draw_date", -1).to_list(200)
+    return await db.results.find(q, {"_id": 0}).sort("draw_date", -1).to_list(500)
 
 
 @api.post("/results")
 async def upsert_result(data: ResultCreate, user=Depends(require_roles("super_admin", "admin", "directeur"))):
     doc = {
         "lottery_id": data.lottery_id, "draw_date": data.draw_date,
-        "pick3": data.pick3 or [], "pick4": data.pick4 or [],
-        "pick5": data.pick5 or [], "bolet": data.bolet or [],
+        "pick3": data.pick3 or "", "pick4": data.pick4 or "",
+        "pick5": data.pick5 or "", "bolet": data.bolet or [],
         "updated_at": now_iso(), "updated_by": user["id"],
     }
     await db.results.update_one(
@@ -472,7 +462,7 @@ async def upsert_result(data: ResultCreate, user=Depends(require_roles("super_ad
     return doc
 
 
-# ---------- Routes: Dashboard ----------
+# ---------- Dashboard ----------
 @api.get("/dashboard/stats")
 async def dashboard_stats(user=Depends(current_user)):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -486,8 +476,7 @@ async def dashboard_stats(user=Depends(current_user)):
     tickets_sold = 0
     tickets_winning = 0
     payments_total = 0.0
-    by_lottery: Dict[str, float] = {}
-    by_currency: Dict[str, float] = {"HTG": 0.0, "BRL": 0.0}
+    by_lottery = {}
 
     async for t in db.tickets.find(q, {"_id": 0}):
         sales_total += float(t.get("total", 0))
@@ -496,16 +485,16 @@ async def dashboard_stats(user=Depends(current_user)):
             payments_total += float(t.get("payout_amount", 0))
         if t.get("payout_amount", 0) > 0:
             tickets_winning += 1
-        by_lottery[t.get("lottery_name", "?")] = by_lottery.get(t.get("lottery_name", "?"), 0) + float(t.get("total", 0))
-        cur = t.get("currency", "HTG")
-        by_currency[cur] = by_currency.get(cur, 0) + float(t.get("total", 0))
+        ln = t.get("lottery_name", "?")
+        by_lottery[ln] = by_lottery.get(ln, 0) + float(t.get("total", 0))
 
-    # last 7 days trend
     trend = []
     for i in range(6, -1, -1):
-        day = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
-        q2 = dict(q)
-        q2["created_at"] = {"$gte": day, "$lt": (datetime.now(timezone.utc) - timedelta(days=i - 1)).strftime("%Y-%m-%d") if i > 0 else now_iso()[:30]}
+        day_dt = datetime.now(timezone.utc) - timedelta(days=i)
+        day = day_dt.strftime("%Y-%m-%d")
+        next_day = (day_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+        q2 = {**{k: v for k, v in q.items() if k != "created_at"},
+              "created_at": {"$gte": day, "$lt": next_day}}
         total_day = 0.0
         async for t in db.tickets.find(q2, {"_id": 0}):
             total_day += float(t.get("total", 0))
@@ -522,23 +511,20 @@ async def dashboard_stats(user=Depends(current_user)):
         "tickets_winning": tickets_winning,
         "balance": round(sales_total - payments_total, 2),
         "by_lottery": [{"name": k, "value": round(v, 2)} for k, v in by_lottery.items()],
-        "by_currency": by_currency,
         "trend": trend,
         "recent_tickets": recent_tickets,
         "recent_results": recent_results,
     }
 
 
-# ---------- Routes: Settings ----------
+# ---------- Settings ----------
 DEFAULT_PAYOUTS = {
-    "bolet": {"straight": 60, "box": 30},
-    "pick3": {"straight": 500, "box": 80, "combo": 80},
-    "pick4": {"straight": 5000, "box": 200, "combo": 200},
-    "pick5": {"straight": 50000, "box": 500, "combo": 500},
+    "bolet": {"premye": 50, "dezyem": 20, "twazyem": 10, "mariage": 500},
+    "pick3": 500,
+    "pick4": 5000,
+    "pick5": 50000,
 }
-DEFAULT_LIMITS = {
-    "per_number": 1000, "per_game": 5000, "per_lottery": 10000, "per_machann": 50000,
-}
+DEFAULT_LIMITS = {"per_number": 1000, "per_game": 5000, "per_lottery": 10000, "per_machann": 50000}
 
 
 async def get_settings_doc():
@@ -556,13 +542,17 @@ async def get_settings_doc():
             "limits": DEFAULT_LIMITS,
         }
         await db.settings.insert_one(doc)
-        doc.pop("_id", None)
     return doc
 
 
 @api.get("/settings")
 async def get_settings(user=Depends(current_user)):
-    return await get_settings_doc()
+    s = await get_settings_doc()
+    # ensure modern payout structure
+    if not isinstance(s.get("payouts", {}).get("bolet"), dict) or "premye" not in s.get("payouts", {}).get("bolet", {}):
+        s["payouts"] = DEFAULT_PAYOUTS
+        await db.settings.update_one({"id": "global"}, {"$set": {"payouts": DEFAULT_PAYOUTS}})
+    return s
 
 
 @api.put("/settings")
@@ -573,12 +563,12 @@ async def update_settings(data: SettingsUpdate, user=Depends(require_roles("supe
     return await get_settings_doc()
 
 
-# ---------- Routes: Reports ----------
+# ---------- Reports ----------
 @api.get("/reports/sales")
 async def report_sales(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    group_by: str = "day",  # day, lottery, machann, agency
+    group_by: str = "day",
     user=Depends(require_roles("super_admin", "directeur", "superviseur", "admin")),
 ):
     q = {}
@@ -591,7 +581,7 @@ async def report_sales(
         if date_to:
             q["draw_date"]["$lte"] = date_to
 
-    rows: Dict[str, Dict[str, float]] = {}
+    rows = {}
     async for t in db.tickets.find(q, {"_id": 0}):
         if group_by == "day":
             key = t.get("draw_date", "?")
@@ -641,7 +631,6 @@ async def report_export(
     )
 
 
-# ---------- Routes: Audit & Transactions ----------
 @api.get("/audit")
 async def list_audit(user=Depends(require_roles("super_admin", "directeur"))):
     return await db.audit_logs.find({}, {"_id": 0}).sort("timestamp", -1).to_list(200)
@@ -654,43 +643,48 @@ async def list_payments(user=Depends(current_user)):
 
 # ---------- Seed ----------
 DEFAULT_LOTTERIES = [
-    {"name": "New York Midday", "code": "NY_MID", "schedule": "12:30"},
-    {"name": "New York Evening", "code": "NY_EVE", "schedule": "22:30"},
-    {"name": "Georgia Midday", "code": "GA_MID", "schedule": "12:29"},
-    {"name": "Georgia Evening", "code": "GA_EVE", "schedule": "18:59"},
-    {"name": "Texas Morning", "code": "TX_MOR", "schedule": "10:12"},
-    {"name": "Texas Evening", "code": "TX_EVE", "schedule": "22:12"},
-    {"name": "Florida Midday", "code": "FL_MID", "schedule": "13:30"},
-    {"name": "Florida Evening", "code": "FL_EVE", "schedule": "21:45"},
+    {"name": "Florida Midi", "code": "FL_MID", "state": "FL", "session": "midday"},
+    {"name": "Florida Soir", "code": "FL_EVE", "state": "FL", "session": "evening"},
+    {"name": "Georgia Midi", "code": "GA_MID", "state": "GA", "session": "midday"},
+    {"name": "Georgia Soir", "code": "GA_EVE", "state": "GA", "session": "evening"},
+    {"name": "New York Midi", "code": "NY_MID", "state": "NY", "session": "midday"},
+    {"name": "New York Soir", "code": "NY_EVE", "state": "NY", "session": "evening"},
+    {"name": "Texas Midi", "code": "TX_MID", "state": "TX", "session": "midday"},
+    {"name": "Texas Soir", "code": "TX_EVE", "state": "TX", "session": "evening"},
 ]
 
 
 @app.on_event("startup")
 async def startup():
-    # Indexes
     await db.users.create_index("email", unique=True)
     await db.tickets.create_index("ticket_number", unique=True)
     await db.results.create_index([("lottery_id", 1), ("draw_date", 1)], unique=True)
 
-    # Seed lotteries
-    for lot in DEFAULT_LOTTERIES:
-        if not await db.lotteries.find_one({"code": lot["code"]}):
-            await db.lotteries.insert_one({"id": gen_id(), **lot, "active": True})
+    # Migration: rebuild lotteries if structure outdated (no 'state' field)
+    sample = await db.lotteries.find_one({})
+    if sample and "state" not in sample:
+        logger.info("Migrating lotteries to new structure (state/session)...")
+        await db.lotteries.delete_many({})
+        sample = None
+
+    if not sample:
+        for lot in DEFAULT_LOTTERIES:
+            await db.lotteries.update_one(
+                {"code": lot["code"]},
+                {"$set": {**lot, "active": True}, "$setOnInsert": {"id": gen_id()}},
+                upsert=True,
+            )
 
     # Seed super admin
     if not await db.users.find_one({"role": "super_admin"}):
         await db.users.insert_one({
-            "id": gen_id(),
-            "email": "admin@toplotto.ht",
+            "id": gen_id(), "email": "admin@toplotto.ht",
             "password": hash_password("Admin123!"),
-            "name": "Super Admin",
-            "role": "super_admin",
-            "active": True,
-            "created_at": now_iso(),
+            "name": "Super Admin", "role": "super_admin",
+            "active": True, "created_at": now_iso(),
         })
-        logger.info("Seeded super admin: admin@toplotto.ht / Admin123!")
+        logger.info("Seeded super admin")
 
-    # Seed default agency
     if not await db.agencies.find_one({}):
         await db.agencies.insert_one({
             "id": gen_id(), "name": "Agence Principale",
@@ -698,7 +692,6 @@ async def startup():
             "active": True, "balance": 0.0, "created_at": now_iso(),
         })
 
-    # Init settings
     await get_settings_doc()
 
 

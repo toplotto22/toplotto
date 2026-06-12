@@ -1,0 +1,41 @@
+{
+  "summary": "TOP LOTTO V2 backend + frontend regression. Rewrote /app/backend/tests/test_toplotto_api.py for V2 schema (auto-detect game, no play_type, results as single-string pick3/4/5 + bolet[3], payouts bolet={premye:50,dezyem:20,twazyem:10,mariage:500}+pick3=500/pick4=5000/pick5=50000). All 21 pytest cases PASS. Verified every payout: bolet position 1/2/3 -> 500/200/100, mariage 32-12 amount 5 -> 2500, pick3 -> 2500, pick4 -> 10000, pick5 -> 50000, pay flow, double-pay rejection, cancel-paid rejection. Frontend: login + Dashboard render (after fix), Sales auto-detect (32->BÒLÈT, 932->PICK3, 8034->PICK4), Add-to-cart 10.00, Mariage dialog adds item, Bulk pairs '12 34 56' amt 5 adds 3 items (cart total 30.00), Results page exposes all 40 testids (FL/GA/NY/TX x midday/evening x p3/p4/boul-0/1/2) + results-save-all, Admin Settings tab exposes all 9 payout/exchange/save testids (pick3 current 500), Verify page lookup works, mobile menu (390x844) present + drawer opens. No English visible on Dashboard sidebar (Tableau de bord/Vente/Tickets/Vérifier/Résultats/Paiements/Rapports/Paramètres/Déconnexion, FR/HT switch, HTG/BRL switch).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Dashboard.jsx (recent_results render)", "issue": "FIXED. Code called (r.pick3 || []).filter(Boolean) but V2 schema makes r.pick3 a STRING — causing 'TypeError: (r.pick3 || []).filter is not a function' overlay on Dashboard whenever any recent result had pick3 populated. Patched lines 131-138 to render r.pick3/r.pick4 as plain strings and guard r.bolet with Array.isArray. Verified after fix: overlay gone, P3: 932 / P4: 8034 / BL: 32/12/77 chips visible.", "selector": "Dashboard recent_results", "priority": "HIGH (was blocking)"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard 'PAR LOTERIE' pie chart legend", "issues": ["Long names ('New York Midi/Soir', 'Georgia Midi/Soir') overlap each other in the legend area — labels get clipped to 'New', and Florida labels stack. Recommend a vertical legend or shorter codes (FL-Midi/FL-Soir)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_toplotto_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Tighten dashboard pie chart legend layout so all 8 lotteries are readable.",
+    "(Optional) Consider exposing has_won / win_position in /api/tickets list endpoint (currently only available via per-ticket GET) to simplify front-end winners reporting.",
+    "(Optional) cancel_ticket still does not refund payout if cancellation logic ever expanded to paid tickets (currently blocks correctly — keep blocking)."
+  ],
+  "critical_code_review_comments": [
+    "Dashboard.jsx had a hard schema-drift bug (pick3 array vs string) — recommend adding a TypeScript / Pydantic-generated frontend type or at least Array.isArray guards everywhere r.bolet / r.pick* are consumed.",
+    "server.py compute_payout: cfg can be either a number (pick3/4/5) OR a dict; the `isinstance(cfg, (int, float))` branch works, but if a super_admin saves payouts as a string via PUT /settings no validation prevents it. Add Pydantic typing on payouts.",
+    "server.py /api/settings auto-heals legacy payout structure on GET but does NOT auto-heal payouts.pick3 if someone overwrote it with an array — consider a stricter validator.",
+    "dashboard_stats trend still uses created_at string-prefix comparison (works for ISO-UTC) — flagged previously, still acceptable.",
+    "No rate-limit on /api/auth/login — production hardening item."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_toplotto_api.py (rewritten for V2 schema)",
+    "/app/frontend/src/pages/Dashboard.jsx (fixed r.pick3.filter is not a function — lines 131-140)"
+  ],
+  "success_rate": {"backend": "100% (21/21)", "frontend": "~95% (all critical V2 flows OK; one design issue with pie legend)"},
+  "test_credentials": "admin@toplotto.ht / Admin123! (super_admin)",
+  "seed_data_creation": "Tests created tickets with synthetic draw_dates 2099-01-01..08 and 2099-02-01..02 on lotteries[0..7] plus matching results, so the live production data is not affected. Test machann user 'test_xxx@toplotto.ht' / Pass123! also persisted (active=true).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/ -v --tb=short. All 21 V2 tests should pass against backend. Frontend Dashboard fix is in Dashboard.jsx lines 131-140 (renders r.pick3 / r.pick4 as strings, guards r.bolet with Array.isArray). Admin Settings testids only render under the Tabs value='settings' tab (default is 'users'), so tests must click [data-testid=tab-settings] first. Mobile menu is hidden on >=lg breakpoint; only visible at viewport < lg.",
+  "rca_of_the_issue": "Schema drift: backend V2 returns results.pick3 as a SINGLE STRING (e.g. '932'), but Dashboard.jsx still treated it as an array of strings inherited from V1, calling .filter(Boolean).map(...) on it. Strings have no .filter, hence the 'is not a function' runtime crash. Reproduction: log in as admin@toplotto.ht, ensure at least one result has pick3 saved (e.g. POST /api/results with pick3='932'), open Dashboard — overlay appears. Fix: render r.pick3 / r.pick4 directly as text chips (since they are strings) and wrap r.bolet with Array.isArray(...) for forward safety. After fix the overlay is gone and chips display correctly (P3: 932, P4: 8034, BL: 32, BL: 12, BL: 77)."
+}

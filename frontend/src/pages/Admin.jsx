@@ -14,13 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { ROLES } from "@/lib/i18n";
 import { toast } from "sonner";
-import { Plus, UserPlus, Building2 } from "lucide-react";
+import { UserPlus, Building2, Save } from "lucide-react";
 
 const initialUser = { email: "", password: "", name: "", role: "machann", agency_id: "", phone: "" };
 const initialAgency = { name: "", address: "", phone: "" };
 
 export default function Admin() {
-  const { t, lang } = useApp();
+  const { t, lang, refreshSettings } = useApp();
   const [users, setUsers] = useState([]);
   const [agencies, setAgencies] = useState([]);
   const [settings, setSettings] = useState(null);
@@ -59,25 +59,33 @@ export default function Admin() {
     try {
       await api.put("/settings", settings);
       toast.success(t("success"));
+      refreshSettings();
     } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
   };
 
-  const updatePayout = (game, type, val) => {
+  const setBoletPayout = (key, val) => {
     setSettings({
       ...settings,
       payouts: {
         ...settings.payouts,
-        [game]: { ...(settings.payouts?.[game] || {}), [type]: parseFloat(val) || 0 },
+        bolet: { ...(settings.payouts?.bolet || {}), [key]: parseFloat(val) || 0 },
       },
     });
   };
 
+  const setPickPayout = (game, val) => {
+    setSettings({
+      ...settings,
+      payouts: { ...settings.payouts, [game]: parseFloat(val) || 0 },
+    });
+  };
+
   return (
-    <div className="space-y-6" data-testid="admin-page">
-      <h1 className="text-4xl font-black tracking-tighter">{t("settings")}</h1>
+    <div className="space-y-4 lg:space-y-6" data-testid="admin-page">
+      <h1 className="text-2xl sm:text-4xl font-black tracking-tighter">{t("settings")}</h1>
 
       <Tabs defaultValue="users" className="w-full">
-        <TabsList className="bg-zinc-900 border border-white/5">
+        <TabsList className="bg-zinc-900 border border-white/5 flex-wrap h-auto">
           <TabsTrigger value="users" data-testid="tab-users" className="data-[state=active]:bg-yellow-400 data-[state=active]:text-black">
             {t("users")}
           </TabsTrigger>
@@ -90,8 +98,8 @@ export default function Admin() {
         </TabsList>
 
         <TabsContent value="users" className="mt-4">
-          <Card className="bg-[#121214] border-white/5 p-5">
-            <div className="flex justify-between items-center mb-4">
+          <Card className="bg-[#121214] border-white/5 p-4 sm:p-5">
+            <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
               <h3 className="text-sm uppercase tracking-wider text-zinc-400 font-bold">{t("users")}</h3>
               <Dialog open={openUser} onOpenChange={setOpenUser}>
                 <DialogTrigger asChild>
@@ -99,7 +107,7 @@ export default function Admin() {
                     <UserPlus className="w-4 h-4 mr-2" /> {t("addUser")}
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="bg-[#121214] border-white/10 text-white">
+                <DialogContent className="bg-[#121214] border-white/10 text-white max-h-[90vh] overflow-y-auto">
                   <DialogHeader><DialogTitle>{t("addUser")}</DialogTitle></DialogHeader>
                   <form onSubmit={createUser} className="space-y-3">
                     <div>
@@ -156,13 +164,11 @@ export default function Admin() {
                   {users.map((u) => (
                     <tr key={u.id} className="border-b border-white/5">
                       <td className="py-2.5 font-bold">{u.name}</td>
-                      <td className="py-2.5 font-mono text-zinc-400">{u.email}</td>
+                      <td className="py-2.5 font-mono text-zinc-400 truncate max-w-[180px]">{u.email}</td>
                       <td className="py-2.5">
                         <span className="text-[10px] uppercase tracking-wider px-2 py-1 bg-zinc-800 rounded font-bold">{u.role}</span>
                       </td>
-                      <td className="py-2.5 text-center">
-                        {u.active ? "✓" : "✗"}
-                      </td>
+                      <td className="py-2.5 text-center">{u.active ? "✓" : "✗"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -172,8 +178,8 @@ export default function Admin() {
         </TabsContent>
 
         <TabsContent value="agencies" className="mt-4">
-          <Card className="bg-[#121214] border-white/5 p-5">
-            <div className="flex justify-between items-center mb-4">
+          <Card className="bg-[#121214] border-white/5 p-4 sm:p-5">
+            <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
               <h3 className="text-sm uppercase tracking-wider text-zinc-400 font-bold">{t("agencies")}</h3>
               <Dialog open={openAgency} onOpenChange={setOpenAgency}>
                 <DialogTrigger asChild>
@@ -189,7 +195,7 @@ export default function Admin() {
                       <Input data-testid="agency-form-name" required value={agencyForm.name} onChange={(e) => setAgencyForm({ ...agencyForm, name: e.target.value })} className="bg-zinc-900 border-white/10 mt-1" />
                     </div>
                     <div>
-                      <Label className="text-xs uppercase tracking-wider text-zinc-400">Adresse</Label>
+                      <Label className="text-xs uppercase tracking-wider text-zinc-400">{t("address")}</Label>
                       <Input value={agencyForm.address} onChange={(e) => setAgencyForm({ ...agencyForm, address: e.target.value })} className="bg-zinc-900 border-white/10 mt-1" />
                     </div>
                     <div>
@@ -216,7 +222,7 @@ export default function Admin() {
         <TabsContent value="settings" className="mt-4">
           {settings && (
             <div className="space-y-4">
-              <Card className="bg-[#121214] border-white/5 p-5 space-y-3">
+              <Card className="bg-[#121214] border-white/5 p-4 sm:p-5 space-y-3">
                 <h3 className="text-sm uppercase tracking-wider text-zinc-400 font-bold">{t("businessInfo")}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
@@ -228,7 +234,7 @@ export default function Admin() {
                     <Input value={settings.business_phone || ""} onChange={(e) => setSettings({ ...settings, business_phone: e.target.value })} className="bg-zinc-900 border-white/10 mt-1 font-mono" />
                   </div>
                   <div>
-                    <Label className="text-xs uppercase text-zinc-400">Adresse</Label>
+                    <Label className="text-xs uppercase text-zinc-400">{t("address")}</Label>
                     <Input value={settings.business_address || ""} onChange={(e) => setSettings({ ...settings, business_address: e.target.value })} className="bg-zinc-900 border-white/10 mt-1" />
                   </div>
                   <div>
@@ -236,7 +242,7 @@ export default function Admin() {
                     <Input value={settings.business_email || ""} onChange={(e) => setSettings({ ...settings, business_email: e.target.value })} className="bg-zinc-900 border-white/10 mt-1 font-mono" />
                   </div>
                   <div className="md:col-span-2">
-                    <Label className="text-xs uppercase text-zinc-400">Message ticket</Label>
+                    <Label className="text-xs uppercase text-zinc-400">{t("ticketFooter")}</Label>
                     <Input value={settings.ticket_footer || ""} onChange={(e) => setSettings({ ...settings, ticket_footer: e.target.value })} className="bg-zinc-900 border-white/10 mt-1" />
                   </div>
                   <div>
@@ -246,36 +252,55 @@ export default function Admin() {
                 </div>
               </Card>
 
-              <Card className="bg-[#121214] border-white/5 p-5">
-                <h3 className="text-sm uppercase tracking-wider text-zinc-400 font-bold mb-4">{t("payoutRates")}</h3>
-                <div className="space-y-3">
-                  {["bolet", "pick3", "pick4", "pick5"].map((game) => (
-                    <div key={game} className="border border-white/5 rounded-md p-3 bg-zinc-900/30">
-                      <div className="text-xs uppercase tracking-wider font-bold mb-2 text-yellow-400">{game}</div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                        {["straight", "box", "straight_box", "combo"].map((pt) => (
-                          settings.payouts?.[game]?.[pt] !== undefined || ["bolet"].includes(game) === false || ["straight", "box"].includes(pt) ? (
-                            <div key={pt}>
-                              <Label className="text-[10px] uppercase text-zinc-500">{pt}</Label>
-                              <Input
-                                data-testid={`payout-${game}-${pt}`}
-                                type="number"
-                                value={settings.payouts?.[game]?.[pt] ?? ""}
-                                onChange={(e) => updatePayout(game, pt, e.target.value)}
-                                placeholder="x"
-                                className="bg-zinc-900 border-white/10 h-9 mt-1 font-mono text-sm"
-                              />
-                            </div>
-                          ) : null
-                        ))}
-                      </div>
+              <Card className="bg-[#121214] border-white/5 p-4 sm:p-5 space-y-3">
+                <h3 className="text-sm uppercase tracking-wider text-zinc-400 font-bold">{t("payoutRates")} — BÒLÈT</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {[
+                    ["premye", t("premye"), "text-yellow-400"],
+                    ["dezyem", t("dezyem"), "text-green-400"],
+                    ["twazyem", t("twazyem"), "text-blue-400"],
+                    ["mariage", t("mariageRate"), "text-pink-400"],
+                  ].map(([key, label, color]) => (
+                    <div key={key}>
+                      <Label className={`text-[10px] uppercase tracking-wider font-bold ${color}`}>{label}</Label>
+                      <Input
+                        data-testid={`payout-bolet-${key}`}
+                        type="number" step="0.01"
+                        value={settings.payouts?.bolet?.[key] ?? ""}
+                        onChange={(e) => setBoletPayout(key, e.target.value)}
+                        className="bg-zinc-900 border-white/10 h-11 mt-1 font-mono text-lg text-center"
+                      />
+                      <div className="text-[10px] text-zinc-500 mt-1 text-center">× mise</div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+
+              <Card className="bg-[#121214] border-white/5 p-4 sm:p-5 space-y-3">
+                <h3 className="text-sm uppercase tracking-wider text-zinc-400 font-bold">{t("payoutRates")} — PICK</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {[
+                    ["pick3", t("pickThree")],
+                    ["pick4", t("pickFour")],
+                    ["pick5", t("pickFive")],
+                  ].map(([key, label]) => (
+                    <div key={key}>
+                      <Label className="text-[10px] uppercase tracking-wider text-zinc-400 font-bold">{label}</Label>
+                      <Input
+                        data-testid={`payout-${key}`}
+                        type="number" step="0.01"
+                        value={typeof settings.payouts?.[key] === "number" ? settings.payouts[key] : ""}
+                        onChange={(e) => setPickPayout(key, e.target.value)}
+                        className="bg-zinc-900 border-white/10 h-11 mt-1 font-mono text-lg text-center"
+                      />
+                      <div className="text-[10px] text-zinc-500 mt-1 text-center">× mise</div>
                     </div>
                   ))}
                 </div>
               </Card>
 
               <Button data-testid="settings-save" onClick={saveSettings} className="bg-yellow-400 hover:bg-yellow-500 text-black font-bold glow-gold">
-                {t("saveSettings")}
+                <Save className="w-4 h-4 mr-2" /> {t("saveSettings")}
               </Button>
             </div>
           )}
