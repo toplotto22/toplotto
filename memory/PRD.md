@@ -15,7 +15,18 @@ PWA de gestion de loterie haïtienne/brésilienne avec rôles, ventes POS, résu
 - **Frontend**: React 19 + React Router + Tailwind + shadcn/ui + recharts; AppContext (auth/i18n/currency)
 - **Style**: Dark theme, Gold (#FACC15) primary, IBM Plex Mono pour nombres, Chivo pour titres
 
-## Implementations (Feb 2026 - V2 PRODUCTION)
+## Implementations V3 (Feb 2026)
+- [x] **BRL UNIQUEMENT** — HTG/Gourdes complètement supprimé (switch devise enlevé du header)
+- [x] **Paires automatiques = 10 doubles 00,11,22,33,44,55,66,77,88,99** en un clic + prix commun, éditable par item après
+- [x] **Bulk paste** séparé pour autres numéros multiples
+- [x] **Super admin extended powers**: éditer items + nom client d'un ticket, annuler/supprimer même un ticket payé (reverse paiement), hard-delete utilisateur
+- [x] **Notifications in-app** — cloche dans header avec badge unread, dropdown liste + mark-read
+- [x] **Triggers auto**: "Rezilta yo soti" pour machanns sur POST /api/results ; "Tikè genyen pou peyman" pour admin+super_admin si tickets gagnants pour ce tirage
+- [x] **PWA**: manifest.json + sw.js + icône SVG + meta tags installable + SW registration en production
+- [x] **Offline ticket queue** localStorage + sync auto online + indicator EN LIGNE/HORS LIGNE + compteur tickets en attente cliquable pour sync manuel
+- [x] **ESC/POS infrastructure**: backend endpoint /api/tickets/{n}/escpos (binaire 58/80mm) + /api/print/network (TCP socket)
+- [x] **Impression multi-types**: navigateur / Bluetooth (Web Bluetooth GATT) / USB (Web Serial) / Réseau (TCP) configurable dans Paramètres → onglet Imprimante
+- [x] **Tests**: Backend V2+V3 = 37 tests, 36/37 pass (97%), 1 minor cancelled-ticket fix appliqué
 - [x] Auth JWT + 6 rôles
 - [x] 8 loteries (FL/GA/NY/TX × Midi/Soir) avec state+session
 - [x] **Auto-détection du jeu par nombre de chiffres** (2=Bòlèt, 3=Pick 3, 4=Pick 4, 5=Pick 5) — plus de sélecteur play_type

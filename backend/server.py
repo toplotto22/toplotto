@@ -393,6 +393,10 @@ async def _enrich_ticket(ticket_number: str):
     settings = await get_settings_doc()
     payouts_cfg = settings.get("payouts", {})
     t["result"] = result
+    # Cancelled tickets: keep persisted state, skip recompute
+    if t.get("status") == "cancelled":
+        t["has_result"] = bool(result)
+        return t
     if result:
         total_win = 0.0
         for it in t["items"]:
