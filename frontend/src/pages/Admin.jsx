@@ -18,10 +18,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ROLES } from "@/lib/i18n";
 import { toast } from "sonner";
-import { UserPlus, Building2, Save, Edit2, Trash2, Printer as PrinterIcon } from "lucide-react";
+import { UserPlus, Building2, Save, Edit2, Trash2, Printer as PrinterIcon, Download, Loader2 } from "lucide-react";
 import { getPrinterConfig, setPrinterConfig } from "@/lib/printer";
 
-const initialUser = { email: "", password: "", name: "", role: "machann", agency_id: "", phone: "" };
+const initialUser = { email: "", password: "", name: "", role: "machann", agency_id: "", phone: "", commission_percent: "" };
 const initialAgency = { name: "", address: "", phone: "" };
 
 export default function Admin() {
@@ -35,7 +35,28 @@ export default function Admin() {
   const [openAgency, setOpenAgency] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [printerCfg, setPrinterCfgState] = useState(getPrinterConfig());
+  const [importing, setImporting] = useState(false);
+  const { lotteries, refreshLotteries } = useApp();
   const isSuperAdmin = currentUser?.role === "super_admin";
+
+  const importResults = async () => {
+    setImporting(true);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data } = await api.post(`/results/import?date=${today}`);
+      toast.success(`${data.imported} loteries importées`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || t("error"));
+    } finally { setImporting(false); }
+  };
+
+  const updateLottery = async (lid, fields) => {
+    try {
+      await api.put(`/lotteries/${lid}`, fields);
+      toast.success(t("success"));
+      refreshLotteries();
+    } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
+  };
 
   const load = async () => {
     const [u, a, s] = await Promise.all([
@@ -136,6 +157,9 @@ export default function Admin() {
           <TabsTrigger value="printer" data-testid="tab-printer" className="data-[state=active]:bg-yellow-400 data-[state=active]:text-black">
             {t("printer")}
           </TabsTrigger>
+          <TabsTrigger value="lotteries" data-testid="tab-lotteries" className="data-[state=active]:bg-yellow-400 data-[state=active]:text-black">
+            {t("lotteries")}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="users" className="mt-4">
@@ -185,6 +209,17 @@ export default function Admin() {
                           {agencies.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
                         </SelectContent>
                       </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs uppercase tracking-wider text-zinc-400">{t("commission")}</Label>
+                      <Input
+                        data-testid="user-form-commission"
+                        type="number" step="0.1"
+                        value={userForm.commission_percent}
+                        onChange={(e) => setUserForm({ ...userForm, commission_percent: e.target.value })}
+                        placeholder="0"
+                        className="bg-zinc-900 border-white/10 mt-1 font-mono"
+                      />
                     </div>
                     <Button data-testid="user-form-submit" type="submit" className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-bold">{t("create")}</Button>
                   </form>
@@ -470,8 +505,74 @@ export default function Admin() {
             </Button>
           </Card>
         </TabsContent>
+
+        <TabsContent value="lotteries" className="mt-4">
+          <Card className="bg-[#121214] border-white/5 p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <h3 className="text-sm uppercase tracking-wider text-zinc-400 font-bold">{t("lotteries")} — Horaires & API</h3>
+              <Button
+                data-testid="import-results"
+                onClick={importResults}
+                disabled={importing}
+                className="bg-green-500 hover:bg-green-600 text-black font-bold"
+              >
+                {importing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2" />}
+                {t("importApi")}
+              </Button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-xs uppercase tracking-wider text-zinc-500 font-bold border-b border-white/10">
+                  <tr>
+                    <th className="text-left py-2">{t("lottery")}</th>
+                    <th className="text-center py-2">{t("drawTime")}</th>
+                    <th className="text-center py-2 hidden sm:table-cell">{t("timezone")}</th>
+                    <th className="text-center py-2 hidden md:table-cell">{t("closeOffset")}</th>
+                    <th className="text-center py-2 hidden md:table-cell">API ID P3 / P4</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lotteries.map((l) => (
+                    <tr key={l.id} className="border-b border-white/5">
+                      <td className="py-2.5 font-bold">{l.name}</td>
+                      <td className="py-2.5 text-center">
+                        <Input
+                          data-testid={`lottery-time-${l.code}`}
+                          type="time"
+                          defaultValue={l.local_time}
+                          disabled={!isSuperAdmin}
+                          onBlur={(e) => e.target.value !== l.local_time && updateLottery(l.id, { local_time: e.target.value })}
+                          className="bg-zinc-900 border-white/10 h-9 font-mono text-center w-24 mx-auto"
+                        />
+                      </td>
+                      <td className="py-2.5 text-center text-xs text-zinc-400 font-mono hidden sm:table-cell">{l.timezone}</td>
+                      <td className="py-2.5 text-center hidden md:table-cell">
+                        <Input
+                          data-testid={`lottery-offset-${l.code}`}
+                          type="number"
+                          defaultValue={l.close_offset_minutes || 5}
+                          disabled={!isSuperAdmin}
+                          onBlur={(e) => parseInt(e.target.value) !== l.close_offset_minutes && updateLottery(l.id, { close_offset_minutes: parseInt(e.target.value) })}
+                          className="bg-zinc-900 border-white/10 h-9 font-mono text-center w-16 mx-auto"
+                        />
+                      </td>
+                      <td className="py-2.5 text-center text-xs text-zinc-400 font-mono hidden md:table-cell">
+                        {l.external_pick3_id || "—"} / {l.external_pick4_id || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4 text-xs text-zinc-500 bg-zinc-900/50 p-3 rounded border border-white/5">
+              <b className="text-yellow-400 uppercase">Import API</b> : récupère Pick 3 + Pick 4 depuis lotteryresultsfeed.com pour la date du jour et calcule automatiquement les gagnants pour tous les tickets concernés. Bouton "Importer résultats API" en haut.<br/>
+              <b className="text-yellow-400 uppercase">Horaires</b> : modifiables. Les ventes ferment automatiquement <b>{lotteries[0]?.close_offset_minutes || 5} min</b> avant le tirage local (timezone ET ou CT respectée).
+            </div>
+          </Card>
+        </TabsContent>
       </Tabs>
 
+      {/* Lotteries tab content moved before users to render in Tabs */}
       {editingUser && (
         <Dialog open={true} onOpenChange={(v) => !v && setEditingUser(null)}>
           <DialogContent className="bg-[#121214] border-white/10 text-white">

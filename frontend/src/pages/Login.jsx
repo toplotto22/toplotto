@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
+import Logo from "@/components/Logo";
 
 export default function Login() {
   const { login, t, lang, setLang } = useApp();
@@ -61,9 +62,7 @@ export default function Login() {
 
       <Card className="w-full max-w-md bg-[#121214] border-white/5 relative z-10 p-8 slide-up">
         <div className="flex items-center gap-3 mb-8">
-          <div className="w-14 h-14 rounded-lg bg-yellow-400 text-black flex items-center justify-center font-black text-2xl glow-gold">
-            TL
-          </div>
+          <Logo size={64} />
           <div>
             <h1 className="text-3xl font-black tracking-tighter">TOP LOTTO</h1>
             <p className="text-xs uppercase tracking-[0.2em] text-zinc-500 mt-1">{t("welcomeBackTo")}</p>

@@ -47,6 +47,30 @@ export default function Sales() {
 
   const detected = detectGame(number.length);
 
+  // Detect when sales close for currently selected lottery
+  const selectedLottery = lotteries.find((l) => l.id === lotteryId);
+  const drawInfo = React.useMemo(() => {
+    if (!selectedLottery?.local_time || !selectedLottery?.timezone) return null;
+    try {
+      const [hh, mm] = selectedLottery.local_time.split(":").map(Number);
+      const now = new Date();
+      const offsetHours = selectedLottery.timezone === "America/Chicago" ? 5 : 4;
+      const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      let drawUTC = new Date(todayUTC.getTime() + (hh + offsetHours) * 3600000 + mm * 60000);
+      if (drawUTC <= now) drawUTC = new Date(drawUTC.getTime() + 86400000);
+      const closeAt = new Date(drawUTC.getTime() - (selectedLottery.close_offset_minutes || 5) * 60000);
+      const isOpen = now < closeAt;
+      const diffMs = closeAt - now;
+      const diffMin = Math.max(0, Math.floor(diffMs / 60000));
+      const diffHr = Math.floor(diffMin / 60);
+      const countdown = isOpen
+        ? (diffHr > 0 ? `${diffHr}h ${diffMin % 60}m` : `${diffMin}m`)
+        : null;
+      const drawLocal = `${selectedLottery.local_time} ${selectedLottery.timezone.split("/").pop().replace("_", " ")}`;
+      return { drawLabel: drawLocal, isOpen, countdown };
+    } catch { return null; }
+  }, [selectedLottery, drawDate]);
+
   const addItem = () => {
     if (!detected) {
       toast.error(t("typeNumber"));
@@ -203,11 +227,21 @@ export default function Sales() {
                 <SelectContent className="bg-zinc-900 border-white/10 text-white max-h-[60vh]">
                   {lotteries.map((l) => (
                     <SelectItem key={l.id} value={l.id} className="focus:bg-yellow-400/10 focus:text-yellow-400">
-                      {l.name}
+                      {l.name} <span className="text-zinc-500 ml-2 font-mono text-xs">{l.local_time}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {drawInfo && (
+                <div className={`mt-2 text-xs px-2 py-1.5 rounded font-bold flex items-center justify-between gap-2 ${
+                  drawInfo.isOpen
+                    ? "bg-green-500/10 text-green-400 border border-green-500/20"
+                    : "bg-red-500/10 text-red-400 border border-red-500/20"
+                }`} data-testid="draw-status">
+                  <span className="uppercase tracking-wider">{drawInfo.isOpen ? `${t("nextDraw")}` : t("salesClosed")}</span>
+                  <span className="font-mono">{drawInfo.drawLabel}{drawInfo.countdown ? ` • ${drawInfo.countdown}` : ""}</span>
+                </div>
+              )}
             </div>
             <div>
               <Label className="text-xs uppercase tracking-wider text-zinc-400">{t("drawDate")}</Label>

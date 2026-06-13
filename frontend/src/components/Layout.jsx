@@ -11,6 +11,7 @@ import {
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import NotificationsBell from "./NotificationsBell";
+import Logo from "./Logo";
 import { getQueue } from "@/lib/offline";
 
 const NavItem = ({ to, icon: Icon, label, testId, onClick }) => (
@@ -66,7 +67,7 @@ export default function Layout() {
       <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-white/5 bg-[#0d0d0f] sticky top-0 h-screen">
         <div className="p-5 border-b border-white/5">
           <div className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-md bg-yellow-400 text-black flex items-center justify-center font-black text-lg">TL</div>
+            <Logo size={40} />
             <div>
               <div className="font-black tracking-tight text-lg leading-none">TOP LOTTO</div>
               <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1">{t("poweredBy")}</div>
@@ -94,7 +95,7 @@ export default function Layout() {
           <aside className="w-72 h-full bg-[#0d0d0f] border-r border-white/10 slide-up flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="p-4 border-b border-white/5 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-md bg-yellow-400 text-black flex items-center justify-center font-black">TL</div>
+                <Logo size={36} />
                 <div className="font-black tracking-tight">TOP LOTTO</div>
               </div>
               <button data-testid="mobile-close" onClick={closeMobile} className="text-zinc-400 hover:text-white">
@@ -128,7 +129,7 @@ export default function Layout() {
             <Menu className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2 lg:hidden">
-            <div className="w-7 h-7 rounded-md bg-yellow-400 text-black flex items-center justify-center font-black text-xs">TL</div>
+            <Logo size={28} />
             <span className="font-black text-sm">TOP LOTTO</span>
           </div>
           <div className="flex items-center gap-1 sm:gap-2 ml-auto">

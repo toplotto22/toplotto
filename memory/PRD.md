@@ -15,6 +15,20 @@ PWA de gestion de loterie haïtienne/brésilienne avec rôles, ventes POS, résu
 - **Frontend**: React 19 + React Router + Tailwind + shadcn/ui + recharts; AppContext (auth/i18n/currency)
 - **Style**: Dark theme, Gold (#FACC15) primary, IBM Plex Mono pour nombres, Chivo pour titres
 
+## Implementations V4 (Feb 2026)
+- [x] **Logo TOP LOTTO** intégré dans `/app/frontend/src/assets/logo.jpeg` + composant `<Logo>` rond avec ring doré, utilisé dans sidebar, drawer mobile, login, et ticket print
+- [x] **Ticket redesign** style colorful (sections BÒLÈT rouge / PICK 3 vert / PICK 4 bleu / PICK 5 violet / MARYAJ orange / GRATIS rose) avec header bleu marine, logo rond doré, total banner, barcode + footer www.toplotto.com — fidèle à l'exemple fourni
+- [x] **Lottery Results Feed API** (lotteryresultsfeed.com) intégré avec token dans `.env`, endpoint POST `/api/results/import?date=YYYY-MM-DD` qui récupère Pick3+Pick4 et dérive bòlèt[0] automatiquement
+- [x] **Horaires loteries** configurables (heure locale + timezone IANA America/New_York ou America/Chicago + close_offset_minutes)
+- [x] **Validation timezone-aware**: ventes bloquées si > heure tirage - offset_min (utilise zoneinfo)
+- [x] **Conversion US ↔ Brésil** dans Sales page: countdown "Prochain tirage 21:45 New York • 22h 56m"
+- [x] **Commission marchand** configurable au formulaire utilisateur (UserCreate.commission_percent) + endpoint `/api/machann/commission` qui retourne `{sales, commission_percent, commission_amount}`
+- [x] **Mise à jour auto statut tickets** sur POST /api/results: items[].winning, win_position, win_key, payout, ticket.payout_amount + has_result persistés en DB → la liste tickets reflète immédiatement
+- [x] **PDF download** via reportlab (`/api/tickets/{n}/pdf`) avec bouton "PDF" dans le modal ticket
+- [x] **WhatsApp share** via Web Share API (mobile) ou fallback wa.me + auto-download PDF
+- [x] **Onglet Loteries** dans Paramètres avec édition inline + bouton "Importer résultats API"
+- [x] **Tests**: V4 backend 9/9, V3 backend 36/37, frontend OK
+
 ## Implementations V3 (Feb 2026)
 - [x] **BRL UNIQUEMENT** — HTG/Gourdes complètement supprimé (switch devise enlevé du header)
 - [x] **Paires automatiques = 10 doubles 00,11,22,33,44,55,66,77,88,99** en un clic + prix commun, éditable par item après

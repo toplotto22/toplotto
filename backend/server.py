@@ -15,12 +15,17 @@ import uuid
 import io
 import csv
 import socket
+import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time as dtime
+from zoneinfo import ZoneInfo
 import jwt as pyjwt
 import bcrypt
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.lib.units import mm
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -110,6 +115,7 @@ class UserCreate(BaseModel):
     role: str
     agency_id: Optional[str] = None
     phone: Optional[str] = None
+    commission_percent: Optional[float] = 0.0
 
 
 class UserUpdate(BaseModel):
@@ -119,6 +125,18 @@ class UserUpdate(BaseModel):
     phone: Optional[str] = None
     active: Optional[bool] = None
     password: Optional[str] = None
+    commission_percent: Optional[float] = None
+
+
+class LotteryUpdate(BaseModel):
+    name: Optional[str] = None
+    local_time: Optional[str] = None  # "HH:MM" local to timezone
+    timezone: Optional[str] = None  # IANA tz
+    close_offset_minutes: Optional[int] = None
+    active: Optional[bool] = None
+    external_pick3_id: Optional[int] = None
+    external_pick4_id: Optional[int] = None
+    external_session_label: Optional[str] = None
 
 
 class AgencyCreate(BaseModel):
@@ -211,7 +229,9 @@ async def create_user(data: UserCreate, user=Depends(require_roles("super_admin"
     doc = {
         "id": gen_id(), "email": data.email.lower(), "password": hash_password(data.password),
         "name": data.name, "role": data.role, "agency_id": data.agency_id,
-        "phone": data.phone, "active": True, "created_at": now_iso(),
+        "phone": data.phone, "active": True,
+        "commission_percent": float(data.commission_percent or 0),
+        "created_at": now_iso(),
     }
     await db.users.insert_one(doc)
     await audit(user["id"], "user.create", {"target": doc["id"]})
@@ -272,6 +292,44 @@ async def list_lotteries(user=Depends(current_user)):
     return await db.lotteries.find({}, {"_id": 0}).sort([("state", 1), ("session", 1)]).to_list(100)
 
 
+@api.put("/lotteries/{lid}")
+async def update_lottery(lid: str, data: LotteryUpdate, user=Depends(require_roles("super_admin"))):
+    update = {k: v for k, v in data.model_dump().items() if v is not None}
+    if not update:
+        raise HTTPException(400, "Aucun changement")
+    await db.lotteries.update_one({"id": lid}, {"$set": update})
+    await audit(user["id"], "lottery.update", {"target": lid, "fields": list(update.keys())})
+    return {"ok": True}
+
+
+def lottery_next_draw_utc(lottery: dict) -> Optional[datetime]:
+    """Compute the next upcoming draw datetime in UTC for a lottery."""
+    tz_name = lottery.get("timezone") or "America/New_York"
+    local_time = lottery.get("local_time")
+    if not local_time:
+        return None
+    try:
+        hh, mm = map(int, local_time.split(":"))
+        tz = ZoneInfo(tz_name)
+        now_local = datetime.now(tz)
+        today_draw = now_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if today_draw <= now_local:
+            today_draw = today_draw + timedelta(days=1)
+        return today_draw.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def is_sales_open(lottery: dict) -> bool:
+    """Check if sales are still open (current time before draw - close_offset)."""
+    nxt = lottery_next_draw_utc(lottery)
+    if not nxt:
+        return True
+    offset = lottery.get("close_offset_minutes", 5)
+    close_at = nxt - timedelta(minutes=offset)
+    return datetime.now(timezone.utc) < close_at
+
+
 # ---------- Payout calculation ----------
 def check_win(item, results):
     """
@@ -326,6 +384,15 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
     lottery = await db.lotteries.find_one({"id": data.lottery_id}, {"_id": 0})
     if not lottery:
         raise HTTPException(404, "Loterie introuvable")
+    # Timezone-aware "today" check: use lottery's local timezone
+    try:
+        tz = ZoneInfo(lottery.get("timezone") or "America/New_York")
+        local_today = datetime.now(tz).strftime("%Y-%m-%d")
+    except Exception:
+        local_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if data.draw_date == local_today:
+        if not is_sales_open(lottery):
+            raise HTTPException(400, f"Vente fermée pour {lottery['name']} — tirage trop proche")
     items = []
     total = 0.0
     for it in data.items:
@@ -525,45 +592,47 @@ async def upsert_result(data: ResultCreate, user=Depends(require_roles("super_ad
         {"$set": doc, "$setOnInsert": {"id": gen_id(), "created_at": now_iso()}},
         upsert=True,
     )
-    # Get lottery name for notification
     lottery = await db.lotteries.find_one({"id": data.lottery_id}, {"_id": 0})
     lottery_name = lottery["name"] if lottery else "?"
-    # Notify all machanns
-    await create_notification(
-        target_role="machann",
-        type_="result",
-        title="Rezilta yo soti / Résultats publiés",
-        body=f"{lottery_name} — {data.draw_date}",
-        link="/results",
-    )
-    # Compute winning tickets for this draw and notify admins
+
+    # Auto-update all tickets for this lottery + draw_date
     settings = await get_settings_doc()
     payouts_cfg = settings.get("payouts", {})
     winner_count = 0
     total_owed = 0.0
-    async for t in db.tickets.find({"lottery_id": data.lottery_id, "draw_date": data.draw_date, "paid": {"$ne": True}}, {"_id": 0}):
-        win = sum(compute_payout(it, doc, payouts_cfg) for it in t["items"])
+    async for t in db.tickets.find({"lottery_id": data.lottery_id, "draw_date": data.draw_date, "status": {"$ne": "cancelled"}}, {"_id": 0}):
+        win = 0.0
+        new_items = []
+        for it in t["items"]:
+            won, pos, key = check_win(it, doc)
+            payout = compute_payout(it, doc, payouts_cfg)
+            it["winning"] = won
+            it["win_position"] = pos
+            it["win_key"] = key
+            it["payout"] = payout
+            win += payout
+            new_items.append(it)
+        await db.tickets.update_one(
+            {"id": t["id"]},
+            {"$set": {"items": new_items, "payout_amount": round(win, 2),
+                      "has_result": True, "result_id": doc.get("id")}},
+        )
         if win > 0:
             winner_count += 1
             total_owed += win
+
+    # Notifications
+    await create_notification(target_role="machann", type_="result",
+        title="Rezilta yo soti / Résultats publiés",
+        body=f"{lottery_name} — {data.draw_date}", link="/results")
     if winner_count > 0:
-        await create_notification(
-            target_role="admin",
-            type_="winning",
-            title="Tikè genyen pou peyman / Tickets gagnants",
-            body=f"{winner_count} tikè • {lottery_name} {data.draw_date} • {total_owed:.2f}",
-            link="/payments",
-        )
-        # also notify super_admin
-        await create_notification(
-            target_role="super_admin",
-            type_="winning",
-            title="Tikè genyen pou peyman / Tickets gagnants",
-            body=f"{winner_count} tikè • {lottery_name} {data.draw_date} • {total_owed:.2f}",
-            link="/payments",
-        )
-    await audit(user["id"], "result.upsert", {"lottery": data.lottery_id, "date": data.draw_date})
-    return doc
+        for role in ("admin", "super_admin"):
+            await create_notification(target_role=role, type_="winning",
+                title="Tikè genyen pou peyman / Tickets gagnants",
+                body=f"{winner_count} tikè • {lottery_name} {data.draw_date} • R$ {total_owed:.2f}",
+                link="/payments")
+    await audit(user["id"], "result.upsert", {"lottery": data.lottery_id, "date": data.draw_date, "winners": winner_count})
+    return {**doc, "winners": winner_count, "total_owed": round(total_owed, 2)}
 
 
 # ---------- Notifications ----------
@@ -941,15 +1010,230 @@ async def list_payments(user=Depends(current_user)):
 
 # ---------- Seed ----------
 DEFAULT_LOTTERIES = [
-    {"name": "Florida Midi", "code": "FL_MID", "state": "FL", "session": "midday"},
-    {"name": "Florida Soir", "code": "FL_EVE", "state": "FL", "session": "evening"},
-    {"name": "Georgia Midi", "code": "GA_MID", "state": "GA", "session": "midday"},
-    {"name": "Georgia Soir", "code": "GA_EVE", "state": "GA", "session": "evening"},
-    {"name": "New York Midi", "code": "NY_MID", "state": "NY", "session": "midday"},
-    {"name": "New York Soir", "code": "NY_EVE", "state": "NY", "session": "evening"},
-    {"name": "Texas Midi", "code": "TX_MID", "state": "TX", "session": "midday"},
-    {"name": "Texas Soir", "code": "TX_EVE", "state": "TX", "session": "evening"},
+    {"name": "Florida Midi", "code": "FL_MID", "state": "FL", "session": "midday",
+     "timezone": "America/New_York", "local_time": "13:30", "close_offset_minutes": 5,
+     "external_pick3_id": 69, "external_pick4_id": 68, "external_session_label": "Midday"},
+    {"name": "Florida Soir", "code": "FL_EVE", "state": "FL", "session": "evening",
+     "timezone": "America/New_York", "local_time": "21:45", "close_offset_minutes": 5,
+     "external_pick3_id": 69, "external_pick4_id": 68, "external_session_label": "Evening"},
+    {"name": "Georgia Midi", "code": "GA_MID", "state": "GA", "session": "midday",
+     "timezone": "America/New_York", "local_time": "12:29", "close_offset_minutes": 5,
+     "external_pick3_id": 85, "external_pick4_id": 87, "external_session_label": "Midday"},
+    {"name": "Georgia Soir", "code": "GA_EVE", "state": "GA", "session": "evening",
+     "timezone": "America/New_York", "local_time": "18:59", "close_offset_minutes": 5,
+     "external_pick3_id": 85, "external_pick4_id": 87, "external_session_label": "Evening"},
+    {"name": "New York Midi", "code": "NY_MID", "state": "NY", "session": "midday",
+     "timezone": "America/New_York", "local_time": "14:30", "close_offset_minutes": 5,
+     "external_pick3_id": 253, "external_pick4_id": 255, "external_session_label": "Midday"},
+    {"name": "New York Soir", "code": "NY_EVE", "state": "NY", "session": "evening",
+     "timezone": "America/New_York", "local_time": "22:30", "close_offset_minutes": 5,
+     "external_pick3_id": 253, "external_pick4_id": 255, "external_session_label": "Evening"},
+    {"name": "Texas Midi", "code": "TX_MID", "state": "TX", "session": "midday",
+     "timezone": "America/Chicago", "local_time": "12:27", "close_offset_minutes": 5,
+     "external_pick3_id": 347, "external_pick4_id": 348, "external_session_label": "Day"},
+    {"name": "Texas Soir", "code": "TX_EVE", "state": "TX", "session": "evening",
+     "timezone": "America/Chicago", "local_time": "22:12", "close_offset_minutes": 5,
+     "external_pick3_id": 347, "external_pick4_id": 348, "external_session_label": "Night"},
 ]
+
+
+# ---------- PDF Generation ----------
+def ticket_pdf_bytes(ticket: dict, settings: dict) -> bytes:
+    """Generate a PDF receipt for a ticket (thermal style)."""
+    buf = io.BytesIO()
+    width_mm = 80
+    page_w = width_mm * mm
+    page_h = 200 * mm
+    c = canvas.Canvas(buf, pagesize=(page_w, page_h))
+    y = page_h - 8 * mm
+
+    def text(txt, x=4 * mm, size=8, bold=False, center=False):
+        nonlocal y
+        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
+        if center:
+            c.drawCentredString(page_w / 2, y, str(txt))
+        else:
+            c.drawString(x, y, str(txt))
+        y -= (size + 2)
+
+    def line():
+        nonlocal y
+        c.setDash(1, 2)
+        c.line(4 * mm, y, page_w - 4 * mm, y)
+        c.setDash()
+        y -= 6
+
+    text(settings.get("business_name", "TOP LOTTO"), size=14, bold=True, center=True)
+    text(settings.get("business_address", ""), size=7, center=True)
+    text(settings.get("business_phone", ""), size=7, center=True)
+    line()
+    text(f"TIKÈ: {ticket['ticket_number']}", size=9, bold=True)
+    text(f"DAT: {ticket.get('created_at', '')[:19].replace('T', ' ')}", size=8)
+    text(f"LOTRI: {ticket.get('lottery_name', '')}", size=8, bold=True)
+    text(f"TIRAJ: {ticket.get('draw_date', '')}", size=8)
+    text(f"MACHANN: {ticket.get('machann_name', '')}", size=8)
+    if ticket.get("customer_name"):
+        text(f"KLIYAN: {ticket['customer_name']}", size=8)
+    line()
+    text("JWÈT", size=9, bold=True, center=True)
+    game_labels = {"bolet": "BÒLÈT", "mariage": "MARYAJ", "pick3": "PICK 3", "pick4": "PICK 4", "pick5": "PICK 5"}
+    for it in ticket["items"]:
+        g = game_labels.get(it["game"], it["game"].upper())
+        win_tag = ""
+        if it.get("winning"):
+            win_tag = f" ★{['', '1ye', '2yèm', '3yèm'][it.get('win_position', 0)] if it['game'] == 'bolet' else 'GENYEN'}"
+        left = f"{g} {it['number']}{win_tag}"
+        right = f"{float(it.get('line_total', it['amount'])):.2f}"
+        c.setFont("Helvetica", 8)
+        c.drawString(4 * mm, y, left)
+        c.drawRightString(page_w - 4 * mm, y, right)
+        y -= 10
+    line()
+    text(f"TOTAL: R$ {float(ticket.get('total', 0)):.2f}", size=11, bold=True, center=True)
+    if ticket.get("payout_amount", 0) > 0:
+        line()
+        text("★ GENYEN ★", size=12, bold=True, center=True)
+        text(f"R$ {float(ticket['payout_amount']):.2f}", size=14, bold=True, center=True)
+        if ticket.get("paid"):
+            text("[ PEYE ]", size=9, bold=True, center=True)
+    line()
+    if ticket.get("has_result") and ticket.get("result"):
+        r = ticket["result"]
+        text("REZILTA", size=8, bold=True, center=True)
+        if r.get("bolet"):
+            text("BÒLÈT: " + " ".join(f"{lbl}={b}" for lbl, b in zip(["1ye", "2yèm", "3yèm"], r["bolet"]) if b), size=7, center=True)
+        if r.get("pick3"):
+            text(f"P3: {r['pick3']}", size=7, center=True)
+        if r.get("pick4"):
+            text(f"P4: {r['pick4']}", size=7, center=True)
+        line()
+    text(settings.get("ticket_footer", ""), size=7, center=True)
+    text(ticket["ticket_number"], size=7, center=True)
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+@api.get("/tickets/{ticket_number}/pdf")
+async def ticket_pdf(ticket_number: str, user=Depends(current_user)):
+    t = await _enrich_ticket(ticket_number)
+    settings = await get_settings_doc()
+    data = ticket_pdf_bytes(t, settings)
+    return Response(content=data, media_type="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename={ticket_number}.pdf"})
+
+
+# ---------- Lottery Results Feed Import ----------
+@api.post("/results/import")
+async def import_results(date: Optional[str] = None, user=Depends(require_roles("super_admin", "admin", "directeur"))):
+    """Fetch latest results from external API and upsert into local results."""
+    settings = await get_settings_doc()
+    token = settings.get("lottery_api_token") or os.environ.get("LOTTERY_API_TOKEN")
+    base_url = settings.get("lottery_api_url") or "https://www.lotteryresultsfeed.com/api"
+    if not token:
+        raise HTTPException(400, "Token API non configuré")
+    target_date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    # cache external lottery responses (since pick3 & pick4 share lottery IDs)
+    cache: Dict[int, list] = {}
+
+    async def fetch_results(lottery_id: int):
+        if lottery_id in cache:
+            return cache[lottery_id]
+        async with httpx.AsyncClient(timeout=15) as ac:
+            r = await ac.get(f"{base_url}/lottery/results", params={"id": lottery_id}, headers=headers)
+            if r.status_code != 200:
+                cache[lottery_id] = []
+                return []
+            data = r.json()
+            results = data.get("results", [])
+            cache[lottery_id] = results
+            return results
+
+    imported = 0
+    errors = []
+    async for lot in db.lotteries.find({}, {"_id": 0}):
+        if not lot.get("external_pick3_id") and not lot.get("external_pick4_id"):
+            continue
+        session_label = lot.get("external_session_label", "Midday")
+        pick3_val, pick4_val = "", ""
+        try:
+            if lot.get("external_pick3_id"):
+                results = await fetch_results(lot["external_pick3_id"])
+                for r in results:
+                    if r.get("draw_date") == target_date and r.get("draw_type") == session_label:
+                        balls = r.get("balls") or []
+                        pick3_val = "".join(str(b) for b in balls[:3])
+                        break
+            if lot.get("external_pick4_id"):
+                results = await fetch_results(lot["external_pick4_id"])
+                for r in results:
+                    if r.get("draw_date") == target_date and r.get("draw_type") == session_label:
+                        balls = r.get("balls") or []
+                        pick4_val = "".join(str(b) for b in balls[:4])
+                        break
+            if pick3_val or pick4_val:
+                # Derive 1st boul = last 2 digits of pick3
+                bolet = []
+                if pick3_val:
+                    bolet = [pick3_val[-2:], "", ""]
+                # Upsert
+                existing = await db.results.find_one({"lottery_id": lot["id"], "draw_date": target_date}, {"_id": 0})
+                doc = {
+                    "lottery_id": lot["id"], "draw_date": target_date,
+                    "pick3": pick3_val or (existing or {}).get("pick3", ""),
+                    "pick4": pick4_val or (existing or {}).get("pick4", ""),
+                    "pick5": (existing or {}).get("pick5", ""),
+                    "bolet": bolet if not (existing or {}).get("bolet") else existing["bolet"],
+                    "updated_at": now_iso(), "updated_by": user["id"],
+                }
+                await db.results.update_one(
+                    {"lottery_id": lot["id"], "draw_date": target_date},
+                    {"$set": doc, "$setOnInsert": {"id": gen_id(), "created_at": now_iso(), "source": "external_api"}},
+                    upsert=True,
+                )
+                # Recompute payouts for tickets
+                payouts_cfg = settings.get("payouts", {})
+                async for t in db.tickets.find({"lottery_id": lot["id"], "draw_date": target_date, "status": {"$ne": "cancelled"}}, {"_id": 0}):
+                    win = 0.0
+                    new_items = []
+                    for it in t["items"]:
+                        won, pos, key = check_win(it, doc)
+                        payout = compute_payout(it, doc, payouts_cfg)
+                        it["winning"] = won
+                        it["win_position"] = pos
+                        it["win_key"] = key
+                        it["payout"] = payout
+                        win += payout
+                        new_items.append(it)
+                    await db.tickets.update_one({"id": t["id"]},
+                        {"$set": {"items": new_items, "payout_amount": round(win, 2), "has_result": True}})
+                imported += 1
+        except Exception as e:
+            errors.append({"lottery": lot["name"], "error": str(e)})
+    await audit(user["id"], "results.import", {"date": target_date, "imported": imported})
+    return {"imported": imported, "date": target_date, "errors": errors}
+
+
+# ---------- Machann commission ----------
+@api.get("/machann/commission")
+async def machann_commission(date_from: Optional[str] = None, date_to: Optional[str] = None, user=Depends(current_user)):
+    """Sum of sales × commission_percent for a machann."""
+    q = {"machann_id": user["id"], "status": {"$ne": "cancelled"}}
+    if date_from or date_to:
+        q["draw_date"] = {}
+        if date_from:
+            q["draw_date"]["$gte"] = date_from
+        if date_to:
+            q["draw_date"]["$lte"] = date_to
+    total_sales = 0.0
+    async for t in db.tickets.find(q, {"_id": 0}):
+        total_sales += float(t.get("total", 0))
+    full_user = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    pct = float(full_user.get("commission_percent", 0) or 0)
+    return {"sales": round(total_sales, 2), "commission_percent": pct, "commission_amount": round(total_sales * pct / 100, 2)}
 
 
 @app.on_event("startup")
@@ -958,10 +1242,10 @@ async def startup():
     await db.tickets.create_index("ticket_number", unique=True)
     await db.results.create_index([("lottery_id", 1), ("draw_date", 1)], unique=True)
 
-    # Migration: rebuild lotteries if structure outdated (no 'state' field)
+    # Migration: rebuild/upgrade lotteries if structure outdated (no 'timezone' field)
     sample = await db.lotteries.find_one({})
-    if sample and "state" not in sample:
-        logger.info("Migrating lotteries to new structure (state/session)...")
+    if sample and ("state" not in sample or "timezone" not in sample):
+        logger.info("Migrating lotteries to v3 structure (timezone/local_time/external_ids)...")
         await db.lotteries.delete_many({})
         sample = None
 
@@ -972,6 +1256,14 @@ async def startup():
                 {"$set": {**lot, "active": True}, "$setOnInsert": {"id": gen_id()}},
                 upsert=True,
             )
+    else:
+        # Ensure existing lotteries have new fields
+        for lot in DEFAULT_LOTTERIES:
+            existing = await db.lotteries.find_one({"code": lot["code"]})
+            if existing:
+                update = {k: v for k, v in lot.items() if k not in ("name", "code") and not existing.get(k)}
+                if update:
+                    await db.lotteries.update_one({"code": lot["code"]}, {"$set": update})
 
     # Seed super admin
     if not await db.users.find_one({"role": "super_admin"}):

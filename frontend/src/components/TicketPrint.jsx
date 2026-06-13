@@ -1,9 +1,10 @@
 import React, { useRef, useState } from "react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Printer, X, Bluetooth, Usb, Wifi, Loader2 } from "lucide-react";
+import { Printer, X, Bluetooth, Usb, Wifi, Loader2, FileDown, Share2 } from "lucide-react";
 import { useApp } from "@/lib/context";
 import { GAME_LABELS } from "@/lib/i18n";
+import { API } from "@/lib/api";
 import {
   printBluetooth, printWebSerial, printNetwork, printBrowser, getPrinterConfig,
 } from "@/lib/printer";
@@ -15,8 +16,85 @@ export default function TicketPrint({ ticket, onClose }) {
   const [printing, setPrinting] = useState(null);
   const cfg = getPrinterConfig();
   const width = cfg.width || 80;
-
   const isLocal = ticket.ticket_number?.startsWith("LOCAL-");
+
+  const downloadPdf = async () => {
+    try {
+      const token = localStorage.getItem("tl_token");
+      const res = await fetch(`${API}/tickets/${ticket.ticket_number}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("PDF erè");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${ticket.ticket_number}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      return blob;
+    } catch (err) {
+      toast.error(err.message || t("error"));
+      return null;
+    }
+  };
+
+  const shareWhatsApp = async () => {
+    try {
+      const token = localStorage.getItem("tl_token");
+      const res = await fetch(`${API}/tickets/${ticket.ticket_number}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const blob = await res.blob();
+      const file = new File([blob], `${ticket.ticket_number}.pdf`, { type: "application/pdf" });
+      const shareText = `🎟️ TOP LOTTO — Tikè ${ticket.ticket_number}\n📅 ${ticket.lottery_name} • ${ticket.draw_date}\n💰 Total: R$ ${Number(ticket.total).toFixed(2)}`;
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: `Tikè ${ticket.ticket_number}`, text: shareText, files: [file] });
+      } else {
+        window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, "_blank");
+        await downloadPdf();
+      }
+    } catch (err) {
+      toast.error(err.message || t("error"));
+    }
+  };
+
+  const grouped = {
+    bolet: ticket.items.filter((it) => it.game === "bolet"),
+    pick3: ticket.items.filter((it) => it.game === "pick3"),
+    pick4: ticket.items.filter((it) => it.game === "pick4"),
+    pick5: ticket.items.filter((it) => it.game === "pick5"),
+    mariage: ticket.items.filter((it) => it.game === "mariage"),
+  };
+  const Section = ({ id, label, sub, color, bg, ringColor, items, icon }) => {
+    if (!items?.length) return null;
+    return (
+      <div className="flex items-stretch gap-3 py-2 border-b border-dashed border-blue-900/30 px-3">
+        <div className={`w-14 h-14 shrink-0 rounded-full flex items-center justify-center font-black text-white ${bg} ring-2 ${ringColor}`}>
+          {icon}
+        </div>
+        <div className="flex flex-col justify-center min-w-[68px]">
+          <div className={`font-black uppercase tracking-tight text-base ${color}`}>{label}</div>
+          {sub && <div className="text-[9px] uppercase text-zinc-500 leading-tight">{sub}</div>}
+        </div>
+        <div className="flex-1 space-y-0.5 text-right">
+          {items.map((it, i) => (
+            <div key={i} className="flex items-center justify-between text-sm">
+              <span className={`font-mono font-bold ${color} ${it.winning ? "underline decoration-2 decoration-green-600" : ""}`}>
+                {it.number}
+                {it.winning && (
+                  <span className="ml-1 text-[8px] bg-green-600 text-white px-1 rounded font-bold">
+                    {id === "bolet" ? ["", "1YE", "2YEM", "3YEM"][it.win_position] : "★"}
+                  </span>
+                )}
+              </span>
+              <span className="text-[10px] flex-1 mx-1 border-b border-dotted border-zinc-400 mb-1" />
+              <span className={`font-mono font-bold ${color}`}>R$ {Number(it.line_total ?? it.amount).toFixed(2)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   const doPrint = async (method) => {
     setPrinting(method);
@@ -48,74 +126,84 @@ export default function TicketPrint({ ticket, onClose }) {
 
   return (
     <Dialog open={true} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="bg-white text-black border-white max-w-md p-0 max-h-[95vh] overflow-y-auto" data-testid="ticket-print-modal">
+      <DialogContent className="bg-white text-black border-0 max-w-[440px] p-0 max-h-[95vh] overflow-y-auto" data-testid="ticket-print-modal">
         <DialogTitle className="sr-only">Ticket {ticket.ticket_number}</DialogTitle>
-        <div ref={printRef} className="print-area ticket-print" id="printable">
-          <div className="text-center border-b-2 border-dashed border-black pb-3">
-            <div className="text-2xl font-black tracking-tight">{settings?.business_name || "TOP LOTTO"}</div>
-            <div className="text-[10px] uppercase tracking-widest mt-1">{settings?.business_address}</div>
-            <div className="text-[10px]">{settings?.business_phone}</div>
+        <div ref={printRef} className="print-area" id="printable" style={{ background: "#FBFAF5", color: "#0A1A33", width: "100%", maxWidth: 380, margin: "0 auto" }}>
+          {/* Header with logo */}
+          <div className="bg-[#0A1A33] text-white pt-4 pb-3 px-3 relative" style={{ borderTopLeftRadius: 8, borderTopRightRadius: 8 }}>
+            <div className="flex justify-center">
+              <img src={require("@/assets/logo.jpeg")} alt="TOP LOTTO" className="w-24 h-24 rounded-full ring-2 ring-yellow-400" style={{ objectFit: "cover" }} />
+            </div>
           </div>
-
-          <div className="py-3 text-xs space-y-1 border-b border-dashed border-black">
-            <div className="flex justify-between"><span>TIKÈ:</span><b>{ticket.ticket_number}</b></div>
-            <div className="flex justify-between"><span>DAT:</span><span>{new Date(ticket.created_at || Date.now()).toLocaleString()}</span></div>
-            <div className="flex justify-between"><span>LOTRI:</span><b>{ticket.lottery_name}</b></div>
-            <div className="flex justify-between"><span>TIRAJ:</span><span>{ticket.draw_date}</span></div>
-            <div className="flex justify-between"><span>MACHANN:</span><span>{ticket.machann_name}</span></div>
-            {ticket.customer_name && <div className="flex justify-between"><span>KLIYAN:</span><span>{ticket.customer_name}</span></div>}
-            {isLocal && <div className="text-center font-bold mt-1">[OFFLINE — Senkwonize lè konekte]</div>}
+          {/* Meta info */}
+          <div className="px-3 py-3 grid grid-cols-2 gap-x-2 text-[11px] border-b-2 border-dashed border-blue-900/30 bg-white">
+            <div><b className="text-blue-900">AGENCE :</b> <span className="font-mono">{settings?.business_name || "TOP LOTTO"}</span></div>
+            <div><b className="text-blue-900">TICKET N° :</b> <span className="font-mono font-black text-red-600">{ticket.ticket_number}</span></div>
+            <div><b className="text-blue-900">VENDEUR :</b> {ticket.machann_name}</div>
+            <div><b className="text-blue-900">DATE :</b> <span className="font-mono">{new Date(ticket.created_at || Date.now()).toLocaleDateString("fr-FR")}</span></div>
+            <div><b className="text-blue-900">CLIENT :</b> {ticket.customer_name || "—"}</div>
+            <div><b className="text-blue-900">HEURE :</b> <span className="font-mono">{new Date(ticket.created_at || Date.now()).toLocaleTimeString("fr-FR")}</span></div>
+            <div className="col-span-2"><b className="text-blue-900">MONNAIE :</b> R$ (REAIS)</div>
           </div>
-
-          <div className="py-3 border-b border-dashed border-black">
-            <div className="text-center text-xs font-bold uppercase tracking-widest mb-2">JWÈT</div>
-            {ticket.items.map((it, i) => (
-              <div key={i} className="flex justify-between text-xs py-0.5 items-center">
-                <span className="flex items-center gap-1">
-                  {GAME_LABELS[it.game]}
-                  <b className="ml-1">{it.number}</b>
-                  {it.winning && (
-                    <span className="text-[9px] font-bold ml-1 px-1 border border-black">
-                      ★{it.game === "bolet" ? ["", "1ye", "2yèm", "3yèm"][it.win_position] : "GENYEN"}
-                    </span>
-                  )}
-                </span>
-                <span className="font-bold">{(it.line_total ?? it.amount).toFixed(2)}</span>
-              </div>
-            ))}
+          {/* Banner */}
+          <div className="bg-[#0A1A33] text-white text-[10px] px-3 py-2 grid grid-cols-3 gap-2 text-center font-bold">
+            <div>🌐 LOTERIE : {ticket.lottery_name?.split(" ")[0]?.toUpperCase()}</div>
+            <div>⏰ TIRAGE : {ticket.lottery_name?.split(" ").slice(1).join(" ")?.toUpperCase()}</div>
+            <div>💰 R$ (REAIS)</div>
           </div>
-
+          {/* Items grouped by game */}
+          <div className="bg-white">
+            <Section id="bolet" label="BÒLÈT" sub="(2 chiffres)" color="text-red-700" bg="bg-red-700" ringColor="ring-red-300"
+              items={grouped.bolet} icon={<span className="text-2xl">♛</span>} />
+            <Section id="pick3" label="PICK 3" color="text-green-700" bg="bg-green-700" ringColor="ring-green-300"
+              items={grouped.pick3} icon={<div className="font-black text-[10px] leading-none">PICK<br/><span className="text-lg">3</span><br/>★★★</div>} />
+            <Section id="pick4" label="PICK 4" color="text-blue-700" bg="bg-blue-700" ringColor="ring-blue-300"
+              items={grouped.pick4} icon={<div className="font-black text-[10px] leading-none">PICK<br/><span className="text-lg">4</span><br/>★★★★</div>} />
+            <Section id="pick5" label="PICK 5" color="text-purple-700" bg="bg-purple-700" ringColor="ring-purple-300"
+              items={grouped.pick5} icon={<div className="font-black text-[9px] leading-none">PICK<br/><span className="text-lg">5</span><br/>★★★★★</div>} />
+            <Section id="mariage" label="MARYAJ" sub="PÈYAN" color="text-orange-700" bg="bg-orange-600" ringColor="ring-orange-300"
+              items={grouped.mariage} icon={<span className="text-2xl">⚭</span>} />
+          </div>
+          {/* Results if available */}
           {hasResult && ticket.result && (
-            <div className="py-2 border-b border-dashed border-black text-[10px]">
-              <div className="text-center font-bold uppercase tracking-widest mb-1">REZILTA</div>
-              {ticket.result.bolet?.filter(Boolean).length > 0 && (
-                <div>BÒLÈT: {(ticket.result.bolet || []).map((b, i) => b ? `${["1ye", "2yèm", "3yèm"][i]}=${b}` : "").filter(Boolean).join(" | ")}</div>
-              )}
-              {ticket.result.pick3 && <div>P3: {ticket.result.pick3}</div>}
-              {ticket.result.pick4 && <div>P4: {ticket.result.pick4}</div>}
-              {ticket.result.pick5 && <div>P5: {ticket.result.pick5}</div>}
+            <div className="bg-yellow-50 px-3 py-2 text-[10px] border-y border-yellow-300">
+              <div className="font-bold uppercase tracking-widest mb-1 text-center text-blue-900">REZILTA OFISYÈL</div>
+              <div className="grid grid-cols-2 gap-1">
+                {(ticket.result.bolet || []).filter(Boolean).length > 0 && (
+                  <div className="col-span-2">BÒLÈT: {(ticket.result.bolet || []).map((b, i) => b ? <b key={i} className="mx-1">{["1ye","2yèm","3yèm"][i]}={b}</b> : null)}</div>
+                )}
+                {ticket.result.pick3 && <div>P3: <b className="font-mono">{ticket.result.pick3}</b></div>}
+                {ticket.result.pick4 && <div>P4: <b className="font-mono">{ticket.result.pick4}</b></div>}
+              </div>
             </div>
           )}
-
-          <div className="py-3 text-sm">
-            <div className="flex justify-between font-black text-base">
-              <span>TOTAL ({currency}):</span>
-              <span>{currencySymbol} {Number(total).toFixed(2)}</span>
+          {/* Total banner */}
+          <div className="bg-[#0A1A33] text-white px-3 py-3 flex justify-between items-center">
+            <div className="font-black uppercase tracking-wider">TOTAL GÉNÉRAL</div>
+            <div className="font-mono font-black text-xl">R$ {Number(total).toFixed(2)}</div>
+          </div>
+          {/* Winning banner */}
+          {ticket.payout_amount > 0 && (
+            <div className="bg-green-600 text-white px-3 py-3 text-center">
+              <div className="text-[10px] uppercase tracking-widest font-bold">★ GENYEN ★</div>
+              <div className="font-mono font-black text-2xl">R$ {Number(ticket.payout_amount).toFixed(2)}</div>
+              {ticket.paid && <div className="text-[10px] font-bold mt-1">[ PEYE ]</div>}
+            </div>
+          )}
+          {/* Footer with barcode */}
+          <div className="bg-white px-3 py-3 flex items-center gap-3 border-t-2 border-dashed border-blue-900/30">
+            <div className="text-[10px] flex-1">
+              <div className="font-bold uppercase tracking-wider text-blue-900">SCANNEZ POUR VÉRIFIER</div>
+              <div className="text-zinc-600 italic mt-1">{settings?.ticket_footer || "Chans ou se lavi'w"}</div>
+            </div>
+            <div className="text-right">
+              <div className="my-1" style={{ lineHeight: 0 }}>{barcode}</div>
+              <div className="font-mono text-[10px]">{ticket.ticket_number}</div>
             </div>
           </div>
-
-          {ticket.payout_amount > 0 && (
-            <div className="py-2 border-t-2 border-dashed border-black text-center">
-              <div className="text-sm font-black">★ GENYEN ★</div>
-              <div className="text-xl font-black">{currencySymbol} {Number(ticket.payout_amount).toFixed(2)}</div>
-              {ticket.paid && <div className="text-xs">[ PEYE ]</div>}
-            </div>
-          )}
-
-          <div className="pt-3 text-center border-t border-dashed border-black">
-            <div className="my-2" style={{ lineHeight: 0 }}>{barcode}</div>
-            <div className="font-mono text-[10px]">{ticket.ticket_number}</div>
-            <div className="text-[10px] mt-2 italic">{settings?.ticket_footer}</div>
+          {/* Bottom banner */}
+          <div className="bg-[#0A1A33] text-yellow-400 text-center py-2 text-[10px] font-bold tracking-widest" style={{ borderBottomLeftRadius: 8, borderBottomRightRadius: 8 }}>
+            ★ www.toplotto.com ★
           </div>
         </div>
 
@@ -132,6 +220,12 @@ export default function TicketPrint({ ticket, onClose }) {
             </Button>
             <Button onClick={() => doPrint("network")} disabled={!!printing || isLocal} variant="outline" className="bg-white" data-testid="print-network">
               {printing === "network" ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Wifi className="w-4 h-4 mr-1" /> {t("printerNetwork")}</>}
+            </Button>
+            <Button onClick={downloadPdf} disabled={isLocal} variant="outline" data-testid="download-pdf" className="bg-white">
+              <FileDown className="w-4 h-4 mr-1" /> PDF
+            </Button>
+            <Button onClick={shareWhatsApp} disabled={isLocal} variant="outline" data-testid="share-whatsapp" className="bg-green-50 border-green-500 text-green-700 hover:bg-green-100">
+              <Share2 className="w-4 h-4 mr-1" /> WhatsApp
             </Button>
           </div>
           <Button onClick={onClose} variant="ghost" data-testid="print-close" className="w-full text-zinc-700">
