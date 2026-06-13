@@ -442,15 +442,54 @@ async def pay_ticket(ticket_number: str, user=Depends(require_roles("super_admin
     return {"ok": True, "amount": total_win}
 
 
-@api.delete("/tickets/{ticket_number}")
-async def cancel_ticket(ticket_number: str, user=Depends(require_roles("super_admin", "admin"))):
+@api.put("/tickets/{ticket_number}")
+async def update_ticket(ticket_number: str, data: TicketUpdate, user=Depends(require_roles("super_admin"))):
     t = await db.tickets.find_one({"ticket_number": ticket_number})
     if not t:
         raise HTTPException(404, "Ticket introuvable")
-    if t.get("paid"):
-        raise HTTPException(400, "Ticket déjà payé - annulation impossible")
-    await db.tickets.update_one({"ticket_number": ticket_number}, {"$set": {"status": "cancelled"}})
-    await audit(user["id"], "ticket.cancel", {"ticket": ticket_number})
+    update = {}
+    if data.items is not None:
+        items = []
+        total = 0.0
+        for it in data.items:
+            ld = it.model_dump()
+            ld["line_total"] = float(it.amount)
+            total += float(it.amount)
+            items.append(ld)
+        update["items"] = items
+        update["total"] = total
+    if data.customer_name is not None:
+        update["customer_name"] = data.customer_name
+    if data.status is not None:
+        update["status"] = data.status
+    if not update:
+        raise HTTPException(400, "Aucun changement")
+    await db.tickets.update_one({"ticket_number": ticket_number}, {"$set": update})
+    await audit(user["id"], "ticket.update", {"ticket": ticket_number, "fields": list(update.keys())})
+    return {"ok": True}
+
+
+@api.delete("/tickets/{ticket_number}")
+async def cancel_ticket(ticket_number: str, hard: bool = False, user=Depends(require_roles("super_admin", "admin"))):
+    t = await db.tickets.find_one({"ticket_number": ticket_number})
+    if not t:
+        raise HTTPException(404, "Ticket introuvable")
+    # Only super_admin can act on a paid ticket
+    if t.get("paid") and user["role"] != "super_admin":
+        raise HTTPException(400, "Ticket déjà payé - super admin requis")
+    if hard and user["role"] == "super_admin":
+        await db.tickets.delete_one({"ticket_number": ticket_number})
+        if t.get("paid"):
+            await db.payouts.delete_many({"ticket_number": ticket_number})
+        await audit(user["id"], "ticket.delete", {"ticket": ticket_number})
+    else:
+        upd = {"status": "cancelled"}
+        if t.get("paid") and user["role"] == "super_admin":
+            upd["paid"] = False
+            upd["payout_amount"] = 0.0
+            await db.payouts.delete_many({"ticket_number": ticket_number})
+        await db.tickets.update_one({"ticket_number": ticket_number}, {"$set": upd})
+        await audit(user["id"], "ticket.cancel", {"ticket": ticket_number})
     return {"ok": True}
 
 

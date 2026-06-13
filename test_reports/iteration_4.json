@@ -1,0 +1,35 @@
+{
+  "summary": "TOP LOTTO V3 backend retest after iteration_3 fixes. Ran full pytest suite (V2 + V3) = 37 tests. RESULT: 36/37 PASS (97%). All 3 critical iteration_3 gaps are now FIXED: PUT /api/tickets/{n} works (super_admin edit + total recompute), DELETE /api/tickets/{n}?hard=true performs db.tickets.delete_one + payouts cleanup, DELETE on paid ticket by super_admin now reverses payment (paid=False, status=cancelled, payouts.delete_many). Non-super-admin still gets 400 on paid (verified by creating an 'admin'-role user). The only remaining failure is test_super_admin_cancel_paid_ticket asserting payout_amount==0 after cancel — actual returns 500.0. RCA: _enrich_ticket (server.py L388-410) unconditionally recomputes payout_amount from the result and overwrites the persisted value (0.0) on every GET. The DB write is correct (server.py L489 sets payout_amount=0.0); only the GET response is wrong because enrichment ignores status='cancelled'. Also updated V2 test_cancel_unpaid_then_block_paid to match V3 behavior (super_admin can cancel paid, non-super-admin gets 400).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/tickets/{ticket_number}", "issue": "_enrich_ticket overwrites persisted payout_amount (0.0 after super_admin cancel) by recomputing from result. Causes cancelled+reversed paid tickets to report payout_amount=<win_amount> instead of 0. Fix: in _enrich_ticket, when t.get('status')=='cancelled' (or paid is False), skip the recompute and keep the persisted payout_amount."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_toplotto_v3.py",
+    "/app/backend/tests/test_toplotto_api.py",
+    "/app/test_reports/pytest/pytest_iter4.xml",
+    "/app/test_reports/pytest/pytest_v3_iter4.xml"
+  ],
+  "action_items": [
+    "Fix _enrich_ticket (server.py ~L388-410): when ticket.status == 'cancelled', return persisted payout_amount (do not recompute). Pseudocode at top of result branch: `if t.get('status') == 'cancelled': t['has_result'] = bool(result); return t`. This will make the V3 super_admin paid-cancel test pass and correctly reflect DB state."
+  ],
+  "critical_code_review_comments": [
+    "server.py L388 _enrich_ticket: GET response state diverges from DB persisted state for cancelled tickets — recompute on read ignores cancellation. Single-line guard required.",
+    "server.py L472-493 cancel_ticket: logic is otherwise correct — branches on hard/role properly; payouts.delete_many on paid+super_admin reversal is fine.",
+    "server.py L445-469 update_ticket: total recompute is amount-sum (no game-specific multiplier). Acceptable since amount equals stake.",
+    "TicketUpdate model is now wired correctly to PUT route. Audit logs ticket.update + ticket.delete + ticket.cancel correctly differentiate."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_toplotto_api.py (updated test_cancel_unpaid_then_block_paid to reflect V3: super_admin paid-cancel succeeds; non-super-admin gets 400)"
+  ],
+  "success_rate": {"backend": "97% (36/37 — V2: 21/21, V3: 15/16)", "frontend": "not retested (no frontend changes per request)"},
+  "test_credentials": "admin@toplotto.ht / Admin123! (super_admin)",
+  "seed_data_creation": "Disposable users v3_test_*, v3_admin_*, hd_*, sd_*@toplotto.ht; tickets on 2099-02/05/06/07-* draw_dates; admin/super_admin notifications generated and marked read.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/ -v. Only 1 failing test remains: test_super_admin_cancel_paid_ticket asserts payout_amount==0 after cancel-reversal. Bug is in _enrich_ticket — needs guard for status='cancelled'. After fix, all 37 should pass. V2 test_cancel_unpaid_then_block_paid was rewritten to use a fresh non-super-admin user — keep that pattern.",
+  "rca_of_the_issue": "RCA — single test failure: /app/backend/server.py:_enrich_ticket (L388-410) always recomputes payout_amount from result+payouts_cfg and overwrites t['payout_amount']. After super_admin cancels a paid ticket, the DB correctly stores paid=False, payout_amount=0.0, status='cancelled' (verified by inspecting cancel_ticket L486-490). But GET /api/tickets/{n} returns the recomputed value (500.0) instead of the persisted 0.0. Reproduction: (1) POST /api/tickets winning number, (2) POST /api/results, (3) POST /api/tickets/{n}/pay, (4) DELETE /api/tickets/{n} as super_admin, (5) GET /api/tickets/{n} -> payout_amount=500.0 (expected 0). Mitigation: add `if t.get('status') == 'cancelled': t['has_result'] = bool(result); return t` immediately after fetching `result` in _enrich_ticket."
+}

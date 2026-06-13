@@ -218,18 +218,34 @@ class TestTicketsBoletPosition:
         assert r2.status_code == 400
 
     def test_cancel_unpaid_then_block_paid(self, admin_client):
+        # V3: super_admin CAN now cancel paid tickets (reverses payment).
+        # Non-super-admin (e.g. role 'admin') still gets 400 on paid tickets.
         lot = admin_client.get(f"{API}/lotteries").json()[0]
         date = "2099-02-02"
         # unpaid cancel OK
         t1 = self._create_ticket(admin_client, lot["id"], date, [{"game": "bolet", "number": "01", "amount": 5}])
         r = admin_client.delete(f"{API}/tickets/{t1['ticket_number']}")
         assert r.status_code == 200
-        # paid cannot cancel
+        # paid: create an 'admin' (non-super) user; they should be blocked with 400
+        admin_email = f"v3_admin_{uuid.uuid4().hex[:6]}@toplotto.ht"
+        cr = admin_client.post(f"{API}/users", json={
+            "email": admin_email, "password": "Pass123!", "name": "V3 admin", "role": "admin"
+        })
+        assert cr.status_code == 200, cr.text
+        lr = requests.post(f"{API}/auth/login", json={"email": admin_email, "password": "Pass123!"})
+        assert lr.status_code == 200
+        admin_only = requests.Session()
+        admin_only.headers.update({"Authorization": f"Bearer {lr.json()['token']}"})
+
         t2 = self._create_ticket(admin_client, lot["id"], date, [{"game": "bolet", "number": "77", "amount": 10}])
         self._set_result(admin_client, lot["id"], date, bolet=["77", "00", "00"])
         admin_client.post(f"{API}/tickets/{t2['ticket_number']}/pay")
-        r2 = admin_client.delete(f"{API}/tickets/{t2['ticket_number']}")
-        assert r2.status_code == 400
+        # non-super-admin must still be blocked
+        r2 = admin_only.delete(f"{API}/tickets/{t2['ticket_number']}")
+        assert r2.status_code == 400, f"Non-super-admin should be 400 on paid, got {r2.status_code} {r2.text}"
+        # super_admin now CAN cancel paid (V3) - reverses payment
+        r3 = admin_client.delete(f"{API}/tickets/{t2['ticket_number']}")
+        assert r3.status_code == 200, f"super_admin paid cancel should succeed, got {r3.status_code} {r3.text}"
 
 
 # ----------- RESULTS V2 (string single fields) -----------
