@@ -1,0 +1,53 @@
+{
+  "summary": "TOP LOTTO V3 backend + frontend testing. Created new V3 test file (/app/backend/tests/test_toplotto_v3.py, 16 tests). Backend: 13/16 PASS — notifications (count/list/result-trigger/mark-read/read-all all working), ESC/POS bytes 58mm+80mm OK (binary octet-stream, starts with ESC@), network print returns 500 'Impression échec' on unreachable port, super_admin hard/soft delete user OK, cannot delete own account OK, PWA manifest.json + icon.svg accessible. 3 CRITICAL FAILURES — backend MISSING V3 endpoints: (1) PUT /api/tickets/{n} returns 405 Method Not Allowed (super_admin edit ticket NOT IMPLEMENTED), (2) DELETE /api/tickets/{n} as super_admin on PAID ticket returns 400 'Ticket déjà payé - annulation impossible' (paid-ticket reversal NOT IMPLEMENTED), (3) DELETE /api/tickets/{n}?hard=true silently ignores hard param — ticket still GETs 200 after delete (hard-delete NOT IMPLEMENTED, only soft cancel). Frontend (super_admin admin@toplotto.ht/Admin123!): ALL V3 UI elements present — currency-switch REMOVED (0 count), lang-switch/notif-bell/online-indicator visible in header, Sales shows 'R$ BRL', open-auto-doubles dialog opens with amount + Tout-ajouter button, clicking adds 10 doubles to cart with total R$ 50.00 ('10 doubles ajoutés (BRL 50.00)' toast). Tickets list shows ticket-edit-*/ticket-cancel-*/ticket-delete-* buttons (22+22+24). Admin Users tab shows user-edit-*/user-deactivate-*/user-delete-* (6/5/6). Admin tab-printer shows printer-type/printer-width/printer-save. Notif bell dropdown opens showing 'Tikè genyen pou peyman / Tickets gagnants' entries with unread badge count. No 'HTG' or 'Gourde' text anywhere.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "PUT /api/tickets/{ticket_number}", "issue": "Endpoint not implemented (405 Method Not Allowed). V3 requires super_admin to edit ticket items/customer_name and recalculate total.", "priority": "CRITICAL"},
+      {"endpoint": "DELETE /api/tickets/{n} (paid ticket as super_admin)", "issue": "Returns 400 'Ticket déjà payé - annulation impossible'. V3 requires super_admin to cancel even paid tickets: set status=cancelled, paid=false, payout_amount=0, and remove db.payouts record.", "priority": "CRITICAL"},
+      {"endpoint": "DELETE /api/tickets/{n}?hard=true", "issue": "Query param 'hard' is not declared in the route — silently ignored. Ticket still exists after 'hard' delete (GET returns 200 instead of 404). Only soft cancel happens. V3 requires actual db.tickets.delete_one when hard=true and user is super_admin.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "/api/settings", "issue": "Still exposes exchange_rate_brl_to_htg (default 25.0). Since HTG is fully removed in V3, consider deprecating this field or hiding it from frontend."},
+      {"endpoint": "/api/tickets POST", "issue": "Still accepts arbitrary 'currency' string. Could enforce currency='BRL' server-side now that HTG is removed."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Super admin Edit ticket (UI)", "issue": "Frontend ticket-edit-{n} button opens edit dialog, but the underlying PUT /api/tickets/{n} backend endpoint returns 405. Save will fail. Block on backend fix.", "affected_selectors": ["ticket-edit-*", "edit-ticket-save"]},
+      {"flow": "Super admin Cancel paid ticket / Hard delete", "issue": "ticket-cancel-* on paid ticket and ticket-delete-* with hard=true will fail (backend rejects). UI buttons exist but backend not ready.", "affected_selectors": ["ticket-cancel-*", "ticket-delete-*"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_toplotto_v3.py",
+    "/app/backend/tests/test_toplotto_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_v3.xml"
+  ],
+  "action_items": [
+    "IMPLEMENT PUT /api/tickets/{ticket_number} for super_admin: accept TicketUpdate {items, customer_name, status}, update ticket, recompute total from new items.line_total sum, return updated ticket.",
+    "EXTEND DELETE /api/tickets/{ticket_number}: accept query param 'hard: bool=False'. If user.role == 'super_admin' and ticket.paid: reverse payment (set paid=False, payout_amount=0, status='cancelled', delete db.payouts record where ticket_number matches). If hard=True and super_admin: db.tickets.delete_one. For non-super admins on paid ticket: keep current 400 behavior.",
+    "(Optional) Remove or deprecate exchange_rate_brl_to_htg in /api/settings since HTG is gone.",
+    "(Optional) Validate ticket.currency='BRL' on POST /api/tickets server-side."
+  ],
+  "critical_code_review_comments": [
+    "server.py is missing 3 V3 endpoints declared in the PRD/review — PUT /api/tickets/{n}, DELETE /api/tickets/{n}?hard=true, and super_admin paid-ticket reversal. Existing DELETE has hard-coded `if t.get('paid'): raise 400` with no role exception.",
+    "TicketUpdate Pydantic model IS defined (lines 156-159) but is NEVER wired to a route — orphan model. Strong indicator the PUT endpoint was planned but not added.",
+    "NetworkPrintInput Pydantic model and /api/print/network are properly wired and working.",
+    "create_notification function is good but never indexes 'target_role'+'read_by' — could be slow with thousands of notifs; consider compound index db.notifications.create_index([('target_role',1),('created_at',-1)]).",
+    "ESC/POS encoding uses cp850 which is fine for Latin-1; Haitian Creole accents will mostly survive but consider cp1252 or explicit transliteration if printers complain.",
+    "Frontend printer Bluetooth/Web Serial cannot run in headless browser — out of scope, but the print-browser button should be tested manually.",
+    "Dashboard pie-chart legend overlap (carried from V2 report) still present."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_toplotto_v3.py (new, 16 V3-specific tests)"
+  ],
+  "success_rate": {"backend": "81% (13/16 V3 tests; V2 tests still 21/21)", "frontend": "100% (all V3 UI elements present and rendering correctly)"},
+  "test_credentials": "admin@toplotto.ht / Admin123! (super_admin)",
+  "seed_data_creation": "Tests create disposable machanns with 'v3_test_*@toplotto.ht', 'hd_*@toplotto.ht', 'sd_*@toplotto.ht' emails plus tickets on draw_dates 2099-05/06/07-*. Soft-deleted users remain in db (active=false); hard-deleted are gone. Several admin/super_admin 'Tikè genyen' notifications were created and then marked read.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/ -v. V2 file (test_toplotto_api.py) has 21 tests, V3 (test_toplotto_v3.py) has 16. The 3 failing V3 tests in TestSuperAdminTicketPowers will fail until main agent implements PUT /api/tickets/{n} and extends DELETE /api/tickets/{n} with hard=true + paid-ticket reversal for super_admin. Frontend test ids already exist and integration will work once backend is patched. Use REACT_APP_BACKEND_URL https://lottery-hub-48.preview.emergentagent.com. Service worker won't register in dev (NODE_ENV != production) — expected.",
+  "rca_of_the_issue": "Backend server.py is missing PUT /api/tickets/{ticket_number} entirely (route never declared, hence 405). TicketUpdate Pydantic model exists at lines 156-159 but is orphaned. DELETE /api/tickets/{ticket_number} at lines 445-454 has no `hard` query param and unconditionally raises 400 when ticket.paid is True regardless of caller role. Fix requires: (1) add `@api.put('/tickets/{ticket_number}')` handler restricted to super_admin that accepts TicketUpdate, recomputes total, persists; (2) modify cancel_ticket to accept `hard: bool = False` query param, branch on user role (super_admin can reverse paid + db.payouts.delete_one), and on hard=True do db.tickets.delete_one. Reproduction: see test_super_admin_edit_ticket / test_super_admin_cancel_paid_ticket / test_super_admin_hard_delete_ticket in /app/backend/tests/test_toplotto_v3.py."
+}

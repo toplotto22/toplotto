@@ -14,3 +14,10 @@ root.render(
     </AppProvider>
   </React.StrictMode>
 );
+
+// Register Service Worker (production builds only)
+if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}

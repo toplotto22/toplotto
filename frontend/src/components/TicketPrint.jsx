@@ -1,22 +1,50 @@
-import React, { useRef } from "react";
+import React, { useRef, useState } from "react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Printer, X } from "lucide-react";
+import { Printer, X, Bluetooth, Usb, Wifi, Loader2 } from "lucide-react";
 import { useApp } from "@/lib/context";
 import { GAME_LABELS } from "@/lib/i18n";
+import {
+  printBluetooth, printWebSerial, printNetwork, printBrowser, getPrinterConfig,
+} from "@/lib/printer";
+import { toast } from "sonner";
 
 export default function TicketPrint({ ticket, onClose }) {
   const { t, settings } = useApp();
   const printRef = useRef(null);
+  const [printing, setPrinting] = useState(null);
+  const cfg = getPrinterConfig();
+  const width = cfg.width || 80;
 
-  const handlePrint = () => window.print();
+  const isLocal = ticket.ticket_number?.startsWith("LOCAL-");
 
-  const barcode = ticket.ticket_number.split("").map((c, i) => (
+  const doPrint = async (method) => {
+    setPrinting(method);
+    try {
+      if (isLocal && method !== "browser") {
+        toast.error("Ticket offline — impression navigateur uniquement");
+        return;
+      }
+      if (method === "bluetooth") await printBluetooth(ticket.ticket_number, width);
+      else if (method === "webserial") await printWebSerial(ticket.ticket_number, width);
+      else if (method === "network") await printNetwork(ticket.ticket_number, { width });
+      else printBrowser();
+      if (method !== "browser") toast.success(t("success"));
+    } catch (err) {
+      toast.error(err.message || t("error"));
+    } finally {
+      setPrinting(null);
+    }
+  };
+
+  const barcode = (ticket.ticket_number || "").split("").map((c, i) => (
     <div key={i} style={{ width: c === "0" ? 3 : 2, height: 28, background: "black", display: "inline-block", marginRight: 1 }} />
   ));
 
   const total = ticket.total || ticket.items?.reduce((s, it) => s + (it.line_total || it.amount), 0) || 0;
   const hasResult = ticket.has_result;
+  const currency = ticket.currency || "BRL";
+  const currencySymbol = "R$";
 
   return (
     <Dialog open={true} onOpenChange={(v) => !v && onClose()}>
@@ -36,6 +64,7 @@ export default function TicketPrint({ ticket, onClose }) {
             <div className="flex justify-between"><span>TIRAJ:</span><span>{ticket.draw_date}</span></div>
             <div className="flex justify-between"><span>MACHANN:</span><span>{ticket.machann_name}</span></div>
             {ticket.customer_name && <div className="flex justify-between"><span>KLIYAN:</span><span>{ticket.customer_name}</span></div>}
+            {isLocal && <div className="text-center font-bold mt-1">[OFFLINE — Senkwonize lè konekte]</div>}
           </div>
 
           <div className="py-3 border-b border-dashed border-black">
@@ -70,15 +99,15 @@ export default function TicketPrint({ ticket, onClose }) {
 
           <div className="py-3 text-sm">
             <div className="flex justify-between font-black text-base">
-              <span>TOTAL ({ticket.currency}):</span>
-              <span>{Number(total).toFixed(2)}</span>
+              <span>TOTAL ({currency}):</span>
+              <span>{currencySymbol} {Number(total).toFixed(2)}</span>
             </div>
           </div>
 
           {ticket.payout_amount > 0 && (
             <div className="py-2 border-t-2 border-dashed border-black text-center">
               <div className="text-sm font-black">★ GENYEN ★</div>
-              <div className="text-xl font-black">{Number(ticket.payout_amount).toFixed(2)} {ticket.currency}</div>
+              <div className="text-xl font-black">{currencySymbol} {Number(ticket.payout_amount).toFixed(2)}</div>
               {ticket.paid && <div className="text-xs">[ PEYE ]</div>}
             </div>
           )}
@@ -90,12 +119,23 @@ export default function TicketPrint({ ticket, onClose }) {
           </div>
         </div>
 
-        <div className="no-print flex gap-2 p-3 border-t bg-zinc-100 sticky bottom-0">
-          <Button onClick={handlePrint} data-testid="print-confirm" className="flex-1 bg-black text-white hover:bg-zinc-800">
-            <Printer className="w-4 h-4 mr-2" /> {t("printTicket")}
-          </Button>
-          <Button onClick={onClose} variant="outline" data-testid="print-close">
-            <X className="w-4 h-4" />
+        <div className="no-print bg-zinc-100 p-3 border-t sticky bottom-0 space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <Button onClick={() => doPrint("browser")} disabled={!!printing} variant="outline" className="bg-white" data-testid="print-browser">
+              {printing === "browser" ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Printer className="w-4 h-4 mr-1" /> {t("printerBrowser")}</>}
+            </Button>
+            <Button onClick={() => doPrint("bluetooth")} disabled={!!printing || isLocal} variant="outline" className="bg-white" data-testid="print-bluetooth">
+              {printing === "bluetooth" ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Bluetooth className="w-4 h-4 mr-1" /> BT</>}
+            </Button>
+            <Button onClick={() => doPrint("webserial")} disabled={!!printing || isLocal} variant="outline" className="bg-white" data-testid="print-serial">
+              {printing === "webserial" ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Usb className="w-4 h-4 mr-1" /> USB</>}
+            </Button>
+            <Button onClick={() => doPrint("network")} disabled={!!printing || isLocal} variant="outline" className="bg-white" data-testid="print-network">
+              {printing === "network" ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Wifi className="w-4 h-4 mr-1" /> {t("printerNetwork")}</>}
+            </Button>
+          </div>
+          <Button onClick={onClose} variant="ghost" data-testid="print-close" className="w-full text-zinc-700">
+            <X className="w-4 h-4 mr-2" /> {t("cancel")}
           </Button>
         </div>
       </DialogContent>

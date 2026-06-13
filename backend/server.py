@@ -4,7 +4,7 @@ Auto-detect game by digit count. Bòlèt with mariage. Position-based payouts (p
 """
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -14,6 +14,7 @@ import logging
 import uuid
 import io
 import csv
+import socket
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
@@ -152,6 +153,19 @@ class ResultCreate(BaseModel):
     bolet: Optional[List[str]] = None  # [premye, dezyem, twazyem]
 
 
+class TicketUpdate(BaseModel):
+    items: Optional[List[TicketItem]] = None
+    customer_name: Optional[str] = None
+    status: Optional[str] = None
+
+
+class NetworkPrintInput(BaseModel):
+    ticket_number: str
+    printer_ip: str
+    printer_port: int = 9100
+    width: int = 80
+
+
 class SettingsUpdate(BaseModel):
     business_name: Optional[str] = None
     business_phone: Optional[str] = None
@@ -219,9 +233,15 @@ async def update_user(user_id: str, data: UserUpdate, user=Depends(require_roles
 
 
 @api.delete("/users/{user_id}")
-async def delete_user(user_id: str, user=Depends(require_roles("super_admin"))):
-    await db.users.update_one({"id": user_id}, {"$set": {"active": False}})
-    await audit(user["id"], "user.deactivate", {"target": user_id})
+async def delete_user(user_id: str, hard: bool = False, user=Depends(require_roles("super_admin"))):
+    if user_id == user["id"]:
+        raise HTTPException(400, "Vous ne pouvez pas supprimer votre propre compte")
+    if hard:
+        await db.users.delete_one({"id": user_id})
+        await audit(user["id"], "user.delete", {"target": user_id})
+    else:
+        await db.users.update_one({"id": user_id}, {"$set": {"active": False}})
+        await audit(user["id"], "user.deactivate", {"target": user_id})
     return {"ok": True}
 
 
@@ -365,8 +385,7 @@ async def list_tickets(
     return await db.tickets.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
 
 
-@api.get("/tickets/{ticket_number}")
-async def get_ticket(ticket_number: str, user=Depends(current_user)):
+async def _enrich_ticket(ticket_number: str):
     t = await db.tickets.find_one({"ticket_number": ticket_number}, {"_id": 0})
     if not t:
         raise HTTPException(404, "Ticket introuvable")
@@ -389,6 +408,11 @@ async def get_ticket(ticket_number: str, user=Depends(current_user)):
     else:
         t["has_result"] = False
     return t
+
+
+@api.get("/tickets/{ticket_number}")
+async def get_ticket(ticket_number: str, user=Depends(current_user)):
+    return await _enrich_ticket(ticket_number)
 
 
 @api.post("/tickets/{ticket_number}/pay")
@@ -458,8 +482,239 @@ async def upsert_result(data: ResultCreate, user=Depends(require_roles("super_ad
         {"$set": doc, "$setOnInsert": {"id": gen_id(), "created_at": now_iso()}},
         upsert=True,
     )
+    # Get lottery name for notification
+    lottery = await db.lotteries.find_one({"id": data.lottery_id}, {"_id": 0})
+    lottery_name = lottery["name"] if lottery else "?"
+    # Notify all machanns
+    await create_notification(
+        target_role="machann",
+        type_="result",
+        title="Rezilta yo soti / Résultats publiés",
+        body=f"{lottery_name} — {data.draw_date}",
+        link="/results",
+    )
+    # Compute winning tickets for this draw and notify admins
+    settings = await get_settings_doc()
+    payouts_cfg = settings.get("payouts", {})
+    winner_count = 0
+    total_owed = 0.0
+    async for t in db.tickets.find({"lottery_id": data.lottery_id, "draw_date": data.draw_date, "paid": {"$ne": True}}, {"_id": 0}):
+        win = sum(compute_payout(it, doc, payouts_cfg) for it in t["items"])
+        if win > 0:
+            winner_count += 1
+            total_owed += win
+    if winner_count > 0:
+        await create_notification(
+            target_role="admin",
+            type_="winning",
+            title="Tikè genyen pou peyman / Tickets gagnants",
+            body=f"{winner_count} tikè • {lottery_name} {data.draw_date} • {total_owed:.2f}",
+            link="/payments",
+        )
+        # also notify super_admin
+        await create_notification(
+            target_role="super_admin",
+            type_="winning",
+            title="Tikè genyen pou peyman / Tickets gagnants",
+            body=f"{winner_count} tikè • {lottery_name} {data.draw_date} • {total_owed:.2f}",
+            link="/payments",
+        )
     await audit(user["id"], "result.upsert", {"lottery": data.lottery_id, "date": data.draw_date})
     return doc
+
+
+# ---------- Notifications ----------
+async def create_notification(type_, title, body, target_role=None, target_user_id=None, link=""):
+    await db.notifications.insert_one({
+        "id": gen_id(),
+        "type": type_,
+        "title": title,
+        "body": body,
+        "link": link,
+        "target_role": target_role,
+        "target_user_id": target_user_id,
+        "read_by": [],
+        "created_at": now_iso(),
+    })
+
+
+@api.get("/notifications")
+async def list_notifications(user=Depends(current_user), limit: int = 50):
+    q = {
+        "$or": [
+            {"target_user_id": user["id"]},
+            {"target_role": user["role"]},
+            {"target_role": "all"},
+        ]
+    }
+    notifs = await db.notifications.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    # mark read status
+    for n in notifs:
+        n["read"] = user["id"] in (n.get("read_by") or [])
+    return notifs
+
+
+@api.get("/notifications/count")
+async def notif_count(user=Depends(current_user)):
+    q = {
+        "$or": [
+            {"target_user_id": user["id"]},
+            {"target_role": user["role"]},
+            {"target_role": "all"},
+        ],
+        "read_by": {"$ne": user["id"]},
+    }
+    return {"unread": await db.notifications.count_documents(q)}
+
+
+@api.post("/notifications/{nid}/read")
+async def mark_read(nid: str, user=Depends(current_user)):
+    await db.notifications.update_one({"id": nid}, {"$addToSet": {"read_by": user["id"]}})
+    return {"ok": True}
+
+
+@api.post("/notifications/read-all")
+async def mark_all_read(user=Depends(current_user)):
+    q = {
+        "$or": [
+            {"target_user_id": user["id"]},
+            {"target_role": user["role"]},
+            {"target_role": "all"},
+        ],
+    }
+    await db.notifications.update_many(q, {"$addToSet": {"read_by": user["id"]}})
+    return {"ok": True}
+
+
+# ---------- ESC/POS ----------
+GAME_LABELS_ESCPOS = {
+    "bolet": "BOLET",
+    "mariage": "MARYAJ",
+    "pick3": "PICK 3",
+    "pick4": "PICK 4",
+    "pick5": "PICK 5",
+}
+
+
+def escpos_ticket_bytes(ticket: dict, settings: dict, width: int = 80) -> bytes:
+    """Generate ESC/POS commands for a thermal printer (58mm = 32 chars, 80mm = 48 chars)."""
+    line_width = 32 if width == 58 else 48
+    ESC = b'\x1B'
+    GS = b'\x1D'
+    out = bytearray()
+    out += ESC + b'@'  # init
+
+    def line(text: str = "", align: int = 0, style: int = 0):
+        nonlocal out
+        out += ESC + b'a' + bytes([align])
+        out += ESC + b'!' + bytes([style])
+        try:
+            out += text.encode('cp850', errors='replace')
+        except Exception:
+            out += text.encode('ascii', errors='replace')
+        out += b'\n'
+
+    def sep(c="-"):
+        nonlocal out
+        out += ESC + b'a' + b'\x00'
+        out += ESC + b'!' + b'\x00'
+        out += (c * line_width).encode() + b'\n'
+
+    # Header
+    line(settings.get("business_name", "TOP LOTTO"), align=1, style=0x30)  # double + emphasize
+    line(settings.get("business_address", ""), align=1)
+    line(settings.get("business_phone", ""), align=1)
+    sep("=")
+    # Ticket info
+    line(f"TIKE: {ticket['ticket_number']}", style=0x08)
+    line(f"DAT : {ticket.get('created_at', '')[:19].replace('T', ' ')}")
+    line(f"LOTRI: {ticket.get('lottery_name', '')}")
+    line(f"TIRAJ: {ticket.get('draw_date', '')}")
+    line(f"MACHANN: {ticket.get('machann_name', '')}")
+    if ticket.get("customer_name"):
+        line(f"KLIYAN: {ticket['customer_name']}")
+    sep()
+    # Items
+    line("JWET".center(line_width), style=0x08)
+    for it in ticket["items"]:
+        g = GAME_LABELS_ESCPOS.get(it["game"], it["game"].upper())
+        win_tag = ""
+        if it.get("winning"):
+            if it["game"] == "bolet":
+                win_tag = ["", "*1ye", "*2yem", "*3yem"][it.get("win_position", 0)]
+            else:
+                win_tag = "*GENYEN"
+        left = f"{g} {it['number']} {win_tag}".strip()
+        right = f"{float(it.get('line_total', it['amount'])):.2f}"
+        space = max(1, line_width - len(left) - len(right))
+        line(left + (" " * space) + right)
+    sep()
+    # Total
+    total = float(ticket.get("total", 0))
+    left = "TOTAL"
+    right = f"{total:.2f} {ticket.get('currency', 'BRL')}"
+    space = max(1, line_width - len(left) - len(right))
+    line(left + (" " * space) + right, style=0x18)  # double width+height
+    # Result block
+    if ticket.get("has_result") and ticket.get("result"):
+        r = ticket["result"]
+        sep()
+        line("REZILTA".center(line_width), style=0x08)
+        if r.get("bolet"):
+            boul_str = " ".join(f"{['1ye','2yem','3yem'][i]}={b}" for i, b in enumerate(r["bolet"]) if b)
+            line(f"BOLET: {boul_str}")
+        if r.get("pick3"):
+            line(f"P3: {r['pick3']}")
+        if r.get("pick4"):
+            line(f"P4: {r['pick4']}")
+        if r.get("pick5"):
+            line(f"P5: {r['pick5']}")
+    # Payout
+    if ticket.get("payout_amount", 0) > 0:
+        sep("=")
+        line("*** GENYEN ***".center(line_width), align=1, style=0x30)
+        line(f"{ticket['payout_amount']:.2f} {ticket.get('currency', 'BRL')}".center(line_width), align=1, style=0x18)
+        if ticket.get("paid"):
+            line("[ PEYE ]".center(line_width), align=1, style=0x08)
+    sep("=")
+    # Barcode (CODE39)
+    out += ESC + b'a' + b'\x01'  # center
+    out += GS + b'h' + b'\x50'   # height 80
+    out += GS + b'w' + b'\x02'   # width 2
+    out += GS + b'H' + b'\x02'   # HRI below
+    out += GS + b'k' + b'\x04'   # CODE39
+    out += ticket["ticket_number"].encode() + b'\x00'
+    out += b'\n'
+    # Footer
+    if settings.get("ticket_footer"):
+        line(settings["ticket_footer"], align=1)
+    out += b'\n\n\n'
+    # Cut
+    out += GS + b'V' + b'\x42' + b'\x00'  # partial cut
+    return bytes(out)
+
+
+@api.get("/tickets/{ticket_number}/escpos")
+async def ticket_escpos(ticket_number: str, width: int = 80, user=Depends(current_user)):
+    t = await _enrich_ticket(ticket_number)
+    settings = await get_settings_doc()
+    data = escpos_ticket_bytes(t, settings, width)
+    return Response(content=data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f"attachment; filename={ticket_number}.bin"})
+
+
+@api.post("/print/network")
+async def print_network(data: NetworkPrintInput, user=Depends(current_user)):
+    t = await _enrich_ticket(data.ticket_number)
+    settings = await get_settings_doc()
+    payload = escpos_ticket_bytes(t, settings, data.width)
+    try:
+        with socket.create_connection((data.printer_ip, data.printer_port), timeout=8) as sock:
+            sock.sendall(payload)
+        await audit(user["id"], "print.network", {"ticket": data.ticket_number, "ip": data.printer_ip})
+        return {"ok": True, "bytes": len(payload)}
+    except Exception as e:
+        raise HTTPException(500, f"Impression échec: {e}")
 
 
 # ---------- Dashboard ----------

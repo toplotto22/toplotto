@@ -12,15 +12,20 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader,
+  AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import { ROLES } from "@/lib/i18n";
 import { toast } from "sonner";
-import { UserPlus, Building2, Save } from "lucide-react";
+import { UserPlus, Building2, Save, Edit2, Trash2, Printer as PrinterIcon } from "lucide-react";
+import { getPrinterConfig, setPrinterConfig } from "@/lib/printer";
 
 const initialUser = { email: "", password: "", name: "", role: "machann", agency_id: "", phone: "" };
 const initialAgency = { name: "", address: "", phone: "" };
 
 export default function Admin() {
-  const { t, lang, refreshSettings } = useApp();
+  const { t, lang, refreshSettings, user: currentUser } = useApp();
   const [users, setUsers] = useState([]);
   const [agencies, setAgencies] = useState([]);
   const [settings, setSettings] = useState(null);
@@ -28,6 +33,9 @@ export default function Admin() {
   const [agencyForm, setAgencyForm] = useState(initialAgency);
   const [openUser, setOpenUser] = useState(false);
   const [openAgency, setOpenAgency] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
+  const [printerCfg, setPrinterCfgState] = useState(getPrinterConfig());
+  const isSuperAdmin = currentUser?.role === "super_admin";
 
   const load = async () => {
     const [u, a, s] = await Promise.all([
@@ -53,6 +61,36 @@ export default function Admin() {
       toast.success(t("success"));
       setAgencyForm(initialAgency); setOpenAgency(false); load();
     } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
+  };
+
+  const updateUserField = async (uid, fields) => {
+    try {
+      await api.put(`/users/${uid}`, fields);
+      toast.success(t("success"));
+      load();
+      setEditingUser(null);
+    } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
+  };
+
+  const deactivateUser = async (uid) => {
+    try {
+      await api.delete(`/users/${uid}`);
+      toast.success(t("success"));
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
+  };
+
+  const deleteUser = async (uid) => {
+    try {
+      await api.delete(`/users/${uid}?hard=true`);
+      toast.success(t("success"));
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
+  };
+
+  const savePrinterCfg = () => {
+    setPrinterConfig(printerCfg);
+    toast.success(t("success"));
   };
 
   const saveSettings = async () => {
@@ -94,6 +132,9 @@ export default function Admin() {
           </TabsTrigger>
           <TabsTrigger value="settings" data-testid="tab-settings" className="data-[state=active]:bg-yellow-400 data-[state=active]:text-black">
             {t("settings")}
+          </TabsTrigger>
+          <TabsTrigger value="printer" data-testid="tab-printer" className="data-[state=active]:bg-yellow-400 data-[state=active]:text-black">
+            {t("printer")}
           </TabsTrigger>
         </TabsList>
 
@@ -155,20 +196,69 @@ export default function Admin() {
                 <thead className="text-xs uppercase tracking-wider text-zinc-500 font-bold border-b border-white/10">
                   <tr>
                     <th className="text-left py-2">{t("name")}</th>
-                    <th className="text-left py-2">{t("email")}</th>
+                    <th className="text-left py-2 hidden sm:table-cell">{t("email")}</th>
                     <th className="text-left py-2">{t("role")}</th>
                     <th className="text-center py-2">{t("active")}</th>
+                    {isSuperAdmin && <th className="text-center py-2">{t("actions")}</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {users.map((u) => (
                     <tr key={u.id} className="border-b border-white/5">
                       <td className="py-2.5 font-bold">{u.name}</td>
-                      <td className="py-2.5 font-mono text-zinc-400 truncate max-w-[180px]">{u.email}</td>
+                      <td className="py-2.5 font-mono text-zinc-400 truncate max-w-[180px] hidden sm:table-cell">{u.email}</td>
                       <td className="py-2.5">
                         <span className="text-[10px] uppercase tracking-wider px-2 py-1 bg-zinc-800 rounded font-bold">{u.role}</span>
                       </td>
-                      <td className="py-2.5 text-center">{u.active ? "✓" : "✗"}</td>
+                      <td className="py-2.5 text-center">
+                        {u.active ? <span className="text-green-400">●</span> : <span className="text-red-400">●</span>}
+                      </td>
+                      {isSuperAdmin && (
+                        <td className="py-2.5 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <Button
+                              size="sm" variant="ghost"
+                              data-testid={`user-edit-${u.id}`}
+                              onClick={() => setEditingUser({ ...u, password: "" })}
+                              className="text-blue-400 hover:bg-blue-400/10 h-7 w-7 p-0"
+                            ><Edit2 className="w-3.5 h-3.5" /></Button>
+                            {u.active && (
+                              <Button
+                                size="sm" variant="ghost"
+                                data-testid={`user-deactivate-${u.id}`}
+                                onClick={() => deactivateUser(u.id)}
+                                className="text-orange-400 hover:bg-orange-400/10 h-7 w-7 p-0"
+                                title={t("deactivateUser")}
+                              >●</Button>
+                            )}
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  size="sm" variant="ghost"
+                                  data-testid={`user-delete-${u.id}`}
+                                  className="text-red-400 hover:bg-red-400/10 h-7 w-7 p-0"
+                                  title={t("deleteUser")}
+                                ><Trash2 className="w-3.5 h-3.5" /></Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent className="bg-[#121214] border-white/10 text-white">
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>{t("deleteUser")}</AlertDialogTitle>
+                                  <AlertDialogDescription className="text-zinc-400">
+                                    {u.name} ({u.email}) — {t("confirmDelete")}
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel className="bg-zinc-800 border-white/10">{t("cancel")}</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    onClick={() => deleteUser(u.id)}
+                                    className="bg-red-500 hover:bg-red-600 text-white font-bold"
+                                  >{t("confirm")}</AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -245,10 +335,6 @@ export default function Admin() {
                     <Label className="text-xs uppercase text-zinc-400">{t("ticketFooter")}</Label>
                     <Input value={settings.ticket_footer || ""} onChange={(e) => setSettings({ ...settings, ticket_footer: e.target.value })} className="bg-zinc-900 border-white/10 mt-1" />
                   </div>
-                  <div>
-                    <Label className="text-xs uppercase text-zinc-400">{t("exchangeRate")}</Label>
-                    <Input data-testid="settings-exchange-rate" type="number" step="0.01" value={settings.exchange_rate_brl_to_htg || 0} onChange={(e) => setSettings({ ...settings, exchange_rate_brl_to_htg: parseFloat(e.target.value) })} className="bg-zinc-900 border-white/10 mt-1 font-mono" />
-                  </div>
                 </div>
               </Card>
 
@@ -305,7 +391,144 @@ export default function Admin() {
             </div>
           )}
         </TabsContent>
+        <TabsContent value="printer" className="mt-4">
+          <Card className="bg-[#121214] border-white/5 p-4 sm:p-5 space-y-4">
+            <h3 className="text-sm uppercase tracking-wider text-zinc-400 font-bold flex items-center gap-2">
+              <PrinterIcon className="w-4 h-4" /> {t("printerConfig")}
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs uppercase text-zinc-400">{t("printerType")}</Label>
+                <Select
+                  value={printerCfg.type || "browser"}
+                  onValueChange={(v) => setPrinterCfgState({ ...printerCfg, type: v })}
+                >
+                  <SelectTrigger data-testid="printer-type" className="bg-zinc-900 border-white/10 mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-white/10 text-white">
+                    <SelectItem value="browser" className="focus:bg-yellow-400/10 focus:text-yellow-400">{t("printerBrowser")}</SelectItem>
+                    <SelectItem value="bluetooth" className="focus:bg-yellow-400/10 focus:text-yellow-400">{t("printerBluetooth")}</SelectItem>
+                    <SelectItem value="webserial" className="focus:bg-yellow-400/10 focus:text-yellow-400">{t("printerSerial")}</SelectItem>
+                    <SelectItem value="network" className="focus:bg-yellow-400/10 focus:text-yellow-400">{t("printerNetwork")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs uppercase text-zinc-400">{t("printerWidth")}</Label>
+                <Select
+                  value={String(printerCfg.width || 80)}
+                  onValueChange={(v) => setPrinterCfgState({ ...printerCfg, width: parseInt(v) })}
+                >
+                  <SelectTrigger data-testid="printer-width" className="bg-zinc-900 border-white/10 mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-white/10 text-white">
+                    <SelectItem value="58">58 mm</SelectItem>
+                    <SelectItem value="80">80 mm</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {printerCfg.type === "network" && (
+                <>
+                  <div>
+                    <Label className="text-xs uppercase text-zinc-400">{t("printerIp")}</Label>
+                    <Input
+                      data-testid="printer-ip"
+                      value={printerCfg.printer_ip || ""}
+                      onChange={(e) => setPrinterCfgState({ ...printerCfg, printer_ip: e.target.value })}
+                      placeholder="192.168.1.100"
+                      className="bg-zinc-900 border-white/10 mt-1 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs uppercase text-zinc-400">{t("printerPort")}</Label>
+                    <Input
+                      data-testid="printer-port"
+                      type="number"
+                      value={printerCfg.printer_port || 9100}
+                      onChange={(e) => setPrinterCfgState({ ...printerCfg, printer_port: parseInt(e.target.value) })}
+                      placeholder="9100"
+                      className="bg-zinc-900 border-white/10 mt-1 font-mono"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="text-xs text-zinc-500 bg-zinc-900/50 p-3 rounded border border-white/5">
+              <b className="text-yellow-400 uppercase">{t("printerBluetooth")}</b>: Compatible imprimantes BT GATT (PT-210, MTP-II, etc.)<br/>
+              <b className="text-yellow-400 uppercase">{t("printerSerial")}</b>: Chrome/Edge uniquement — imprimante USB connectée<br/>
+              <b className="text-yellow-400 uppercase">{t("printerNetwork")}</b>: Imprimante Wi-Fi/Ethernet à IP fixe, port 9100 (Epson, Star, etc.)<br/>
+              <b className="text-yellow-400 uppercase">{t("printerBrowser")}</b>: Impression standard HTML
+            </div>
+            <Button
+              data-testid="printer-save"
+              onClick={savePrinterCfg}
+              className="bg-yellow-400 hover:bg-yellow-500 text-black font-bold glow-gold"
+            >
+              <Save className="w-4 h-4 mr-2" /> {t("save")}
+            </Button>
+          </Card>
+        </TabsContent>
       </Tabs>
+
+      {editingUser && (
+        <Dialog open={true} onOpenChange={(v) => !v && setEditingUser(null)}>
+          <DialogContent className="bg-[#121214] border-white/10 text-white">
+            <DialogHeader>
+              <DialogTitle>{t("edit")} — {editingUser.name}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <Label className="text-xs uppercase text-zinc-400">{t("name")}</Label>
+                <Input
+                  data-testid="user-edit-name"
+                  value={editingUser.name}
+                  onChange={(e) => setEditingUser({ ...editingUser, name: e.target.value })}
+                  className="bg-zinc-900 border-white/10 mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-xs uppercase text-zinc-400">{t("role")}</Label>
+                <Select
+                  value={editingUser.role}
+                  onValueChange={(v) => setEditingUser({ ...editingUser, role: v })}
+                >
+                  <SelectTrigger data-testid="user-edit-role" className="bg-zinc-900 border-white/10 mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-white/10 text-white">
+                    {ROLES.map((r) => (
+                      <SelectItem key={r.value} value={r.value} className="focus:bg-yellow-400/10 focus:text-yellow-400">
+                        {lang === "ht" ? r.labelHt : r.labelFr}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs uppercase text-zinc-400">{t("password")} <span className="text-zinc-600">({t("optional")})</span></Label>
+                <Input
+                  data-testid="user-edit-password"
+                  value={editingUser.password || ""}
+                  onChange={(e) => setEditingUser({ ...editingUser, password: e.target.value })}
+                  placeholder="Laisser vide pour ne pas changer"
+                  className="bg-zinc-900 border-white/10 mt-1 font-mono"
+                />
+              </div>
+              <Button
+                data-testid="user-edit-save"
+                onClick={() => {
+                  const fields = { name: editingUser.name, role: editingUser.role };
+                  if (editingUser.password) fields.password = editingUser.password;
+                  updateUserField(editingUser.id, fields);
+                }}
+                className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-bold"
+              >{t("save")}</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

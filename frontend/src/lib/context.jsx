@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import api from "./api";
 import { dict } from "./i18n";
+import { initSync, syncPending } from "./offline";
+import { toast } from "sonner";
 
 const AppContext = createContext(null);
 
@@ -12,14 +14,28 @@ export const AppProvider = ({ children }) => {
     catch { return null; }
   });
   const [lang, setLang] = useState(() => localStorage.getItem("tl_lang") || "fr");
-  const [currency, setCurrency] = useState(() => localStorage.getItem("tl_currency") || "HTG");
   const [settings, setSettings] = useState(null);
   const [lotteries, setLotteries] = useState([]);
+  const [online, setOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [unreadCount, setUnreadCount] = useState(0);
 
+  // Currency is BRL only
+  const currency = "BRL";
   const t = (key) => dict[lang]?.[key] || dict.fr[key] || key;
 
   useEffect(() => { localStorage.setItem("tl_lang", lang); }, [lang]);
-  useEffect(() => { localStorage.setItem("tl_currency", currency); }, [currency]);
+
+  // Online/offline detection
+  useEffect(() => {
+    const onOnline = () => setOnline(true);
+    const onOffline = () => setOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
 
   const login = async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
@@ -39,45 +55,57 @@ export const AppProvider = ({ children }) => {
     try {
       const { data } = await api.get("/settings");
       setSettings(data);
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) { /* offline */ }
   };
 
   const refreshLotteries = async () => {
     try {
       const { data } = await api.get("/lotteries");
       setLotteries(data);
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) { /* offline */ }
+  };
+
+  const refreshNotifCount = async () => {
+    try {
+      const { data } = await api.get("/notifications/count");
+      setUnreadCount(data.unread || 0);
+    } catch (e) { /* offline */ }
   };
 
   useEffect(() => {
     if (user) {
       refreshSettings();
       refreshLotteries();
+      refreshNotifCount();
+      initSync((r) => {
+        if (r.synced > 0) toast.success(`${r.synced} ${t("syncedTickets")}`);
+      });
+      const interval = setInterval(refreshNotifCount, 30000);
+      return () => clearInterval(interval);
     }
+    // eslint-disable-next-line
   }, [user]);
 
-  const formatMoney = (amt, sourceCurrency) => {
-    const src = sourceCurrency || currency;
-    const dst = currency;
-    const rate = settings?.exchange_rate_brl_to_htg || 25;
-    let v = Number(amt) || 0;
-    // Real conversion if source differs from display
-    if (src !== dst) {
-      if (src === "BRL" && dst === "HTG") v = v * rate;
-      else if (src === "HTG" && dst === "BRL") v = v / rate;
-    }
-    const symbol = dst === "HTG" ? "G" : "R$";
-    return `${symbol} ${v.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // Manual sync trigger
+  const triggerSync = async () => {
+    const r = await syncPending();
+    if (r.synced > 0) toast.success(`${r.synced} ${t("syncedTickets")}`);
+    else if (r.failed > 0) toast.error(`${r.failed} ${t("failedSync")}`);
+    else toast.info(t("nothingToSync"));
+    return r;
+  };
+
+  // BRL only
+  const formatMoney = (amt) => {
+    const v = Number(amt) || 0;
+    return `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   return (
     <AppContext.Provider value={{
-      user, login, logout, t, lang, setLang, currency, setCurrency,
+      user, login, logout, t, lang, setLang, currency,
       settings, refreshSettings, lotteries, refreshLotteries, formatMoney,
+      online, unreadCount, refreshNotifCount, triggerSync,
     }}>
       {children}
     </AppContext.Provider>

@@ -4,12 +4,14 @@ import { useApp } from "@/lib/context";
 import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard, ShoppingCart, Ticket as TicketIcon, Trophy, CreditCard,
-  BarChart3, Users, LogOut, ScanLine, Menu, X,
+  BarChart3, Users, LogOut, ScanLine, Menu, X, Wifi, WifiOff, RefreshCw,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import NotificationsBell from "./NotificationsBell";
+import { getQueue } from "@/lib/offline";
 
 const NavItem = ({ to, icon: Icon, label, testId, onClick }) => (
   <NavLink
@@ -31,9 +33,10 @@ const NavItem = ({ to, icon: Icon, label, testId, onClick }) => (
 );
 
 export default function Layout() {
-  const { user, logout, t, lang, setLang, currency, setCurrency } = useApp();
+  const { user, logout, t, lang, setLang, online, triggerSync } = useApp();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const pending = getQueue().length;
   const role = user?.role;
   const can = (...roles) => roles.includes(role);
   const closeMobile = () => setMobileOpen(false);
@@ -129,20 +132,28 @@ export default function Layout() {
             <span className="font-black text-sm">TOP LOTTO</span>
           </div>
           <div className="flex items-center gap-1 sm:gap-2 ml-auto">
-            <div className="flex bg-zinc-900 border border-white/10 rounded-md p-0.5" data-testid="currency-switch">
-              {["HTG", "BRL"].map((c) => (
-                <button
-                  key={c}
-                  data-testid={`currency-${c}`}
-                  onClick={() => setCurrency(c)}
-                  className={`px-2 sm:px-3 py-1 text-[10px] sm:text-xs font-mono font-bold rounded transition-colors ${
-                    currency === c ? "bg-yellow-400 text-black" : "text-zinc-400 hover:text-white"
-                  }`}
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
+            {/* Online/offline + pending sync */}
+            <button
+              data-testid="online-indicator"
+              onClick={triggerSync}
+              title={online ? t("online") : t("offline")}
+              className={`hidden sm:flex items-center gap-1 px-2 py-1 rounded-md text-[10px] uppercase tracking-wider font-bold border transition-colors ${
+                online
+                  ? "bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20"
+                  : "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20"
+              }`}
+            >
+              {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+              <span>{online ? t("online") : t("offline")}</span>
+              {pending > 0 && (
+                <span className="ml-1 px-1 bg-yellow-400 text-black rounded font-mono">
+                  {pending} <RefreshCw className="w-2.5 h-2.5 inline -mt-0.5" />
+                </span>
+              )}
+            </button>
+
+            <NotificationsBell />
+
             <div className="flex bg-zinc-900 border border-white/10 rounded-md p-0.5" data-testid="lang-switch">
               {["fr", "ht"].map((l) => (
                 <button

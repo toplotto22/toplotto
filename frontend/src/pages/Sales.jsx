@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useApp } from "@/lib/context";
 import api from "@/lib/api";
 import { detectGame, GAME_LABELS } from "@/lib/i18n";
+import { queueTicket, isOnline } from "@/lib/offline";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,9 +14,11 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
-import { Trash2, Plus, Printer, ShoppingCart, Heart, Layers } from "lucide-react";
+import { Trash2, Plus, Printer, ShoppingCart, Heart, Layers, Zap } from "lucide-react";
 import { toast } from "sonner";
 import TicketPrint from "@/components/TicketPrint";
+
+const AUTO_DOUBLES = ["00", "11", "22", "33", "44", "55", "66", "77", "88", "99"];
 
 export default function Sales() {
   const { t, lotteries, currency, formatMoney, user } = useApp();
@@ -28,11 +31,13 @@ export default function Sales() {
   const [lastTicket, setLastTicket] = useState(null);
   const [openMariage, setOpenMariage] = useState(false);
   const [openBulk, setOpenBulk] = useState(false);
+  const [openAutoDoubles, setOpenAutoDoubles] = useState(false);
   const [mNum1, setMNum1] = useState("");
   const [mNum2, setMNum2] = useState("");
   const [mAmount, setMAmount] = useState("");
   const [bulkNumbers, setBulkNumbers] = useState("");
   const [bulkAmount, setBulkAmount] = useState("");
+  const [doublesAmount, setDoublesAmount] = useState("");
   const numberRef = useRef(null);
   const amountRef = useRef(null);
 
@@ -83,6 +88,19 @@ export default function Sales() {
     toast.success(t("success"));
   };
 
+  const addAutoDoubles = () => {
+    const amt = parseFloat(doublesAmount);
+    if (!amt || amt <= 0) {
+      toast.error(t("amount"));
+      return;
+    }
+    const newItems = AUTO_DOUBLES.map((n) => ({ game: "bolet", number: n, amount: amt }));
+    setCart([...cart, ...newItems]);
+    setDoublesAmount("");
+    setOpenAutoDoubles(false);
+    toast.success(`10 doubles ajoutés (${currency} ${(amt * 10).toFixed(2)})`);
+  };
+
   const addBulk = () => {
     const amt = parseFloat(bulkAmount);
     if (!amt || amt <= 0) {
@@ -114,16 +132,40 @@ export default function Sales() {
       toast.error(t("cart") + ": " + t("empty"));
       return;
     }
+    const payload = {
+      lottery_id: lotteryId, draw_date: drawDate,
+      currency, items: cart, customer_name: customer,
+    };
+    if (!isOnline()) {
+      const n = queueTicket(payload);
+      toast.warning(`${t("offline")} — ${n} ${t("pendingSync")}`);
+      const fakeTicket = {
+        ticket_number: `LOCAL-${Date.now().toString().slice(-6)}`,
+        ...payload,
+        lottery_name: lotteries.find((l) => l.id === lotteryId)?.name || "?",
+        total: cart.reduce((s, it) => s + (it.amount || 0), 0),
+        machann_name: user?.name,
+        created_at: new Date().toISOString(),
+        status: "active",
+        items: cart,
+      };
+      setLastTicket(fakeTicket);
+      setCart([]); setCustomer("");
+      return;
+    }
     try {
-      const { data } = await api.post("/tickets", {
-        lottery_id: lotteryId, draw_date: drawDate,
-        currency, items: cart, customer_name: customer,
-      });
+      const { data } = await api.post("/tickets", payload);
       toast.success(`${t("success")} ${data.ticket_number}`);
       setLastTicket(data);
       setCart([]); setCustomer("");
     } catch (e) {
-      toast.error(e.response?.data?.detail || t("error"));
+      if (e.message === "Network Error" || !e.response) {
+        const n = queueTicket(payload);
+        toast.warning(`${t("offline")} — ${n} ${t("pendingSync")}`);
+        setCart([]); setCustomer("");
+      } else {
+        toast.error(e.response?.data?.detail || t("error"));
+      }
     }
   };
 
@@ -144,7 +186,7 @@ export default function Sales() {
         </div>
         <div className="text-right">
           <div className="text-[10px] uppercase tracking-wider text-zinc-500">{t("currency")}</div>
-          <div className="text-xl font-mono font-bold text-yellow-400">{currency}</div>
+          <div className="text-xl font-mono font-bold text-yellow-400">R$ BRL</div>
         </div>
       </div>
 
@@ -221,7 +263,56 @@ export default function Sales() {
           </div>
 
           {/* Special options */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <Dialog open={openAutoDoubles} onOpenChange={setOpenAutoDoubles}>
+              <DialogTrigger asChild>
+                <Button
+                  data-testid="open-auto-doubles"
+                  variant="outline"
+                  className="h-12 bg-yellow-400/5 border-yellow-400/30 text-yellow-400 hover:bg-yellow-400/10 font-bold"
+                >
+                  <Zap className="w-4 h-4 mr-2" /> {t("pairsAuto")}
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="bg-[#121214] border-white/10 text-white">
+                <DialogHeader>
+                  <DialogTitle className="text-yellow-400 flex items-center gap-2">
+                    <Zap className="w-5 h-5" /> {t("autoDoubles")}
+                  </DialogTitle>
+                </DialogHeader>
+                <p className="text-xs text-zinc-500 -mt-2">
+                  Ajoute 10 doubles d'un coup avec un prix commun
+                </p>
+                <div className="grid grid-cols-5 gap-2">
+                  {AUTO_DOUBLES.map((n) => (
+                    <div key={n} className="bg-zinc-900 border border-yellow-400/20 rounded-md py-2 text-center font-mono font-bold text-yellow-400 text-lg">
+                      {n}
+                    </div>
+                  ))}
+                </div>
+                <Input
+                  data-testid="auto-doubles-amount"
+                  inputMode="decimal"
+                  value={doublesAmount}
+                  onChange={(e) => setDoublesAmount(e.target.value)}
+                  placeholder={`${t("commonAmount")} (${currency})`}
+                  className="bg-zinc-900 border-white/10 h-12 font-mono text-xl"
+                />
+                <div className="text-xs text-zinc-500 text-center">
+                  {doublesAmount && (
+                    <>Total: <b className="text-yellow-400">{currency} {(parseFloat(doublesAmount || 0) * 10).toFixed(2)}</b></>
+                  )}
+                </div>
+                <Button
+                  data-testid="auto-doubles-add"
+                  onClick={addAutoDoubles}
+                  className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-bold"
+                >
+                  <Plus className="w-4 h-4 mr-2" /> {t("bulkAdd")} (10)
+                </Button>
+              </DialogContent>
+            </Dialog>
+
             <Dialog open={openMariage} onOpenChange={setOpenMariage}>
               <DialogTrigger asChild>
                 <Button
@@ -284,7 +375,7 @@ export default function Sales() {
                   variant="outline"
                   className="h-12 bg-blue-500/5 border-blue-500/30 text-blue-400 hover:bg-blue-500/10 font-bold"
                 >
-                  <Layers className="w-4 h-4 mr-2" /> {t("pairsAuto")}
+                  <Layers className="w-4 h-4 mr-2" /> {t("bulkPaste")}
                 </Button>
               </DialogTrigger>
               <DialogContent className="bg-[#121214] border-white/10 text-white">
@@ -374,7 +465,7 @@ export default function Sales() {
               <span className="font-mono">{cart.length}</span>
             </div>
             <div className="flex justify-between text-xl sm:text-2xl font-mono font-bold text-yellow-400">
-              <span>{currency}</span>
+              <span>R$</span>
               <span data-testid="cart-total">{total.toFixed(2)}</span>
             </div>
           </div>
