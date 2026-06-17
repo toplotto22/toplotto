@@ -80,7 +80,7 @@ export default function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="bg-zinc-900 border-white/10 h-11 font-mono focus:border-yellow-400 focus:ring-yellow-400/30"
-              placeholder="admin@toplotto.ht"
+              placeholder="admin@toplotto.com"
             />
           </div>
           <div className="space-y-2">

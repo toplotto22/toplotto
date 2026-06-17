@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Trophy, Save } from "lucide-react";
+import { Trophy, Save, Download } from "lucide-react";
 
 const STATE_COLORS = {
   FL: "border-orange-500/30 bg-orange-500/5",
@@ -100,6 +100,22 @@ export default function Results() {
             <Input type="date" data-testid="results-date" value={date} onChange={(e) => setDate(e.target.value)}
               className="bg-zinc-900 border-white/10 h-10 mt-1 font-mono" />
           </div>
+          {canEdit && (
+            <Button data-testid="results-import-api" onClick={async () => {
+              try {
+                const { data } = await api.post(`/results/import?date=${date}`);
+                toast.success(`${data.imported || 0} résultat(s) importé(s)`);
+                if (data.errors?.length) {
+                  toast.error(`${data.errors.length} erreur(s) — vérifiez le token API`);
+                }
+                load();
+              } catch (err) {
+                toast.error(err.response?.data?.detail || "Token API manquant — configurez LOTTERY_API_TOKEN");
+              }
+            }} className="h-10 bg-zinc-800 hover:bg-zinc-700 border border-yellow-400/30 text-yellow-400 font-bold">
+              <Download className="w-4 h-4 mr-2" /> Importer API
+            </Button>
+          )}
           {canEdit && (
             <Button data-testid="results-save-all" onClick={saveAll}
               className="h-10 bg-yellow-400 hover:bg-yellow-500 text-black font-bold glow-gold">

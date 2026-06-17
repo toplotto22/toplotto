@@ -21,7 +21,7 @@ import TicketPrint from "@/components/TicketPrint";
 const AUTO_DOUBLES = ["00", "11", "22", "33", "44", "55", "66", "77", "88", "99"];
 
 export default function Sales() {
-  const { t, lotteries, currency, formatMoney, user } = useApp();
+  const { t, lotteries, currency, formatMoney, user, settings } = useApp();
   const [lotteryId, setLotteryId] = useState("");
   const [drawDate, setDrawDate] = useState(new Date().toISOString().slice(0, 10));
   const [number, setNumber] = useState("");
