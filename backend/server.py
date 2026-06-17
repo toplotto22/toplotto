@@ -1342,15 +1342,29 @@ async def startup():
                 if update:
                     await db.lotteries.update_one({"code": lot["code"]}, {"$set": update})
 
-    # Seed super admin
-    if not await db.users.find_one({"role": "super_admin"}):
+    # Seed / update super admin (idempotent)
+    SUPER_ADMIN_EMAIL = "admin@toplotto.com"
+    SUPER_ADMIN_PASSWORD = "Admin@1000"
+    existing_admin = await db.users.find_one({"role": "super_admin"})
+    if not existing_admin:
         await db.users.insert_one({
-            "id": gen_id(), "email": "admin@toplotto.ht",
-            "password": hash_password("Admin123!"),
+            "id": gen_id(), "email": SUPER_ADMIN_EMAIL,
+            "password": hash_password(SUPER_ADMIN_PASSWORD),
             "name": "Super Admin", "role": "super_admin",
             "active": True, "created_at": now_iso(),
         })
         logger.info("Seeded super admin")
+    else:
+        # Force-update email & password to current canonical values
+        await db.users.update_one(
+            {"_id": existing_admin["_id"]},
+            {"$set": {
+                "email": SUPER_ADMIN_EMAIL,
+                "password": hash_password(SUPER_ADMIN_PASSWORD),
+                "active": True,
+            }},
+        )
+        logger.info("Updated super admin credentials")
 
     if not await db.agencies.find_one({}):
         await db.agencies.insert_one({
