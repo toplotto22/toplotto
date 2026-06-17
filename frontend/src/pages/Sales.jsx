@@ -150,6 +150,31 @@ export default function Sales() {
   };
 
   const total = cart.reduce((s, it) => s + (it.amount || 0), 0);
+  const paidMariageTotal = cart.filter((it) => it.game === "mariage").reduce((s, it) => s + (it.amount || 0), 0);
+  const gratisThreshold = settings?.gratis?.threshold_brl || 20;
+  const gratisCount = settings?.gratis?.count || 2;
+  const gratisUsed = cart.filter((it) => it.game === "mariage_gratis").length;
+  const gratisAvailable = paidMariageTotal >= gratisThreshold && (settings?.gratis?.enabled ?? true);
+  const gratisRemaining = gratisAvailable ? Math.max(0, gratisCount - gratisUsed) : 0;
+
+  const [gratisN1, setGratisN1] = useState("");
+  const [gratisN2, setGratisN2] = useState("");
+  const [openGratis, setOpenGratis] = useState(false);
+
+  const addGratis = () => {
+    if (gratisN1.length !== 2 || gratisN2.length !== 2) {
+      toast.error("Maryaj Gratis: 2 chiffres");
+      return;
+    }
+    if (gratisRemaining <= 0) {
+      toast.error("Pa gen plis gratis disponib");
+      return;
+    }
+    setCart([...cart, { game: "mariage_gratis", number: `${gratisN1}-${gratisN2}`, amount: 0 }]);
+    setGratisN1(""); setGratisN2("");
+    if (gratisRemaining - 1 <= 0) setOpenGratis(false);
+    toast.success("🎁 Maryaj Gratis ajoute");
+  };
 
   const sell = async () => {
     if (!lotteryId || cart.length === 0) {
@@ -444,6 +469,59 @@ export default function Sales() {
               </DialogContent>
             </Dialog>
           </div>
+
+          {/* MARYAJ GRATIS unlock banner */}
+          {gratisAvailable && (
+            <Dialog open={openGratis} onOpenChange={setOpenGratis}>
+              <DialogTrigger asChild>
+                <button
+                  data-testid="open-gratis"
+                  className="w-full bg-gradient-to-r from-pink-500/10 via-orange-500/10 to-yellow-400/10 border border-orange-500/40 rounded-md p-3 flex items-center justify-between hover:bg-orange-500/15 transition-colors"
+                >
+                  <div className="text-left">
+                    <div className="text-sm font-black text-orange-400">🎁 MARYAJ GRATIS DEBLOKE</div>
+                    <div className="text-[10px] text-zinc-400 mt-0.5">
+                      {gratisRemaining}/{gratisCount} disponible(s) — Pri fiks R$ {(settings?.gratis?.payout_brl || 500).toFixed(0)} si genyen
+                    </div>
+                  </div>
+                  <Plus className="w-5 h-5 text-orange-400" />
+                </button>
+              </DialogTrigger>
+              <DialogContent className="bg-[#121214] border-white/10 text-white">
+                <DialogHeader>
+                  <DialogTitle className="text-orange-400 flex items-center gap-2">🎁 Maryaj Gratis</DialogTitle>
+                </DialogHeader>
+                <p className="text-xs text-zinc-500 -mt-2">
+                  Bonus — 2 chiffres × 2. Si toulède soti dans 3 boul, peyman R$ {(settings?.gratis?.payout_brl || 500).toFixed(2)}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    data-testid="gratis-n1"
+                    inputMode="numeric" maxLength={2}
+                    value={gratisN1}
+                    onChange={(e) => setGratisN1(e.target.value.replace(/\D/g, ""))}
+                    placeholder="00"
+                    className="bg-zinc-900 border-orange-500/30 h-14 font-mono text-3xl text-center"
+                  />
+                  <Input
+                    data-testid="gratis-n2"
+                    inputMode="numeric" maxLength={2}
+                    value={gratisN2}
+                    onChange={(e) => setGratisN2(e.target.value.replace(/\D/g, ""))}
+                    placeholder="00"
+                    className="bg-zinc-900 border-orange-500/30 h-14 font-mono text-3xl text-center"
+                  />
+                </div>
+                <Button
+                  data-testid="gratis-add"
+                  onClick={addGratis}
+                  className="w-full bg-orange-500 hover:bg-orange-600 text-black font-bold"
+                >
+                  <Plus className="w-4 h-4 mr-2" /> Ajoute Gratis ({gratisRemaining} disponib)
+                </Button>
+              </DialogContent>
+            </Dialog>
+          )}
 
           <div className="border-t border-white/5 pt-4">
             <Label className="text-xs uppercase tracking-wider text-zinc-400">{t("customer")} ({t("optional")})</Label>

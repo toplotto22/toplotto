@@ -350,6 +350,11 @@ def check_win(item, results):
         parts = (item.get("number") or "").split("-")
         if len(parts) == 2 and all(p in boul for p in parts):
             return (True, 0, "mariage")
+    elif game == "mariage_gratis":
+        boul = set(b for b in (results.get("bolet") or []) if b)
+        parts = (item.get("number") or "").split("-")
+        if len(parts) == 2 and all(p in boul for p in parts):
+            return (True, 0, "mariage_gratis")
     elif game == "pick3":
         if results.get("pick3") and item["number"] == results["pick3"]:
             return (True, 1, "straight")
@@ -362,7 +367,7 @@ def check_win(item, results):
     return (False, 0, "")
 
 
-def compute_payout(item, results, payouts_cfg):
+def compute_payout(item, results, payouts_cfg, gratis_cfg=None):
     won, pos, key = check_win(item, results)
     if not won:
         return 0.0
@@ -373,6 +378,9 @@ def compute_payout(item, results, payouts_cfg):
         rate = float(cfg.get(key, 0) or 0)
     elif game == "mariage":
         rate = float(payouts_cfg.get("bolet", {}).get("mariage", 0) or 0)
+    elif game == "mariage_gratis":
+        # Fixed BRL payout regardless of amount (since amount is 0)
+        return float((gratis_cfg or DEFAULT_GRATIS).get("payout_brl", 500))
     elif game in ("pick3", "pick4", "pick5"):
         rate = float(cfg if isinstance(cfg, (int, float)) else cfg.get("straight", 0) or 0)
     return float(item["amount"]) * rate
@@ -384,7 +392,6 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
     lottery = await db.lotteries.find_one({"id": data.lottery_id}, {"_id": 0})
     if not lottery:
         raise HTTPException(404, "Loterie introuvable")
-    # Timezone-aware "today" check: use lottery's local timezone
     try:
         tz = ZoneInfo(lottery.get("timezone") or "America/New_York")
         local_today = datetime.now(tz).strftime("%Y-%m-%d")
@@ -393,6 +400,20 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
     if data.draw_date == local_today:
         if not is_sales_open(lottery):
             raise HTTPException(400, f"Vente fermée pour {lottery['name']} — tirage trop proche")
+
+    # Validate MARYAJ GRATIS: require paid mariage total >= threshold and count <= configured
+    settings = await get_settings_doc()
+    gratis_cfg = settings.get("gratis") or DEFAULT_GRATIS
+    paid_mariage_total = sum(float(it.amount) for it in data.items if it.game == "mariage")
+    gratis_items = [it for it in data.items if it.game == "mariage_gratis"]
+    if gratis_items:
+        if not gratis_cfg.get("enabled", True):
+            raise HTTPException(400, "Maryaj Gratis désactivé")
+        if paid_mariage_total < float(gratis_cfg.get("threshold_brl", 20)):
+            raise HTTPException(400, f"Maryaj Gratis nécessite {gratis_cfg.get('threshold_brl', 20):.0f} R$ de mariage payé")
+        if len(gratis_items) > int(gratis_cfg.get("count", 2)):
+            raise HTTPException(400, f"Maximum {gratis_cfg.get('count', 2)} maryaj gratis par ticket")
+
     items = []
     total = 0.0
     for it in data.items:
@@ -468,7 +489,7 @@ async def _enrich_ticket(ticket_number: str):
         total_win = 0.0
         for it in t["items"]:
             won, pos, key = check_win(it, result)
-            payout = compute_payout(it, result, payouts_cfg)
+            payout = compute_payout(it, result, payouts_cfg, settings.get("gratis"))
             it["winning"] = won
             it["win_position"] = pos
             it["win_key"] = key
@@ -498,7 +519,7 @@ async def pay_ticket(ticket_number: str, user=Depends(require_roles("super_admin
         raise HTTPException(400, "Résultats non disponibles")
     settings = await get_settings_doc()
     payouts_cfg = settings.get("payouts", {})
-    total_win = sum(compute_payout(it, result, payouts_cfg) for it in t["items"])
+    total_win = sum(compute_payout(it, result, payouts_cfg, settings.get("gratis")) for it in t["items"])
     if total_win <= 0:
         raise HTTPException(400, "Ticket non gagnant")
     await db.tickets.update_one(
@@ -605,7 +626,7 @@ async def upsert_result(data: ResultCreate, user=Depends(require_roles("super_ad
         new_items = []
         for it in t["items"]:
             won, pos, key = check_win(it, doc)
-            payout = compute_payout(it, doc, payouts_cfg)
+            payout = compute_payout(it, doc, payouts_cfg, settings.get("gratis"))
             it["winning"] = won
             it["win_position"] = pos
             it["win_key"] = key
@@ -830,6 +851,47 @@ async def print_network(data: NetworkPrintInput, user=Depends(current_user)):
 
 
 # ---------- Dashboard ----------
+@api.get("/dashboard/top-machann")
+async def top_machann(month: Optional[str] = None, user=Depends(require_roles("super_admin", "directeur", "superviseur", "admin"))):
+    """Ranking of machanns by sales (and computed commission) for a given month YYYY-MM (default: current)."""
+    target_month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    # Match tickets created within target month
+    pipeline = [
+        {"$match": {
+            "status": {"$ne": "cancelled"},
+            "created_at": {"$gte": f"{target_month}-01", "$lt": f"{target_month}-32"},
+        }},
+        {"$group": {
+            "_id": "$machann_id",
+            "machann_name": {"$first": "$machann_name"},
+            "sales": {"$sum": "$total"},
+            "tickets": {"$sum": 1},
+            "payouts": {"$sum": {"$cond": [{"$eq": ["$paid", True]}, "$payout_amount", 0]}},
+        }},
+        {"$sort": {"sales": -1}},
+        {"$limit": 20},
+    ]
+    rows = await db.tickets.aggregate(pipeline).to_list(50)
+    # join commission percent
+    users_map = {u["id"]: u async for u in db.users.find({}, {"_id": 0, "password": 0})}
+    out = []
+    for r in rows:
+        u = users_map.get(r["_id"], {})
+        pct = float(u.get("commission_percent", 0) or 0)
+        sales = float(r.get("sales", 0))
+        out.append({
+            "machann_id": r["_id"],
+            "machann_name": r.get("machann_name") or u.get("name") or "?",
+            "sales": round(sales, 2),
+            "tickets": r.get("tickets", 0),
+            "payouts": round(float(r.get("payouts", 0)), 2),
+            "commission_percent": pct,
+            "commission_amount": round(sales * pct / 100, 2),
+            "profit": round(sales - float(r.get("payouts", 0)) - sales * pct / 100, 2),
+        })
+    return {"month": target_month, "ranking": out}
+
+
 @api.get("/dashboard/stats")
 async def dashboard_stats(user=Depends(current_user)):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -892,6 +954,12 @@ DEFAULT_PAYOUTS = {
     "pick5": 50000,
 }
 DEFAULT_LIMITS = {"per_number": 1000, "per_game": 5000, "per_lottery": 10000, "per_machann": 50000}
+DEFAULT_GRATIS = {
+    "enabled": True,
+    "threshold_brl": 20.0,      # minimum total spent on mariage to unlock gratis
+    "count": 2,                  # number of free entries granted
+    "payout_brl": 500.0,         # fixed BRL payout per winning gratis mariage
+}
 
 
 async def get_settings_doc():
@@ -907,8 +975,12 @@ async def get_settings_doc():
             "exchange_rate_brl_to_htg": 25.0,
             "payouts": DEFAULT_PAYOUTS,
             "limits": DEFAULT_LIMITS,
+            "gratis": DEFAULT_GRATIS,
         }
         await db.settings.insert_one(doc)
+    elif "gratis" not in doc:
+        await db.settings.update_one({"id": "global"}, {"$set": {"gratis": DEFAULT_GRATIS}})
+        doc["gratis"] = DEFAULT_GRATIS
     return doc
 
 
@@ -1201,7 +1273,7 @@ async def import_results(date: Optional[str] = None, user=Depends(require_roles(
                     new_items = []
                     for it in t["items"]:
                         won, pos, key = check_win(it, doc)
-                        payout = compute_payout(it, doc, payouts_cfg)
+                        payout = compute_payout(it, doc, payouts_cfg, settings.get("gratis"))
                         it["winning"] = won
                         it["win_position"] = pos
                         it["win_key"] = key
@@ -1234,6 +1306,11 @@ async def machann_commission(date_from: Optional[str] = None, date_to: Optional[
     full_user = await db.users.find_one({"id": user["id"]}, {"_id": 0})
     pct = float(full_user.get("commission_percent", 0) or 0)
     return {"sales": round(total_sales, 2), "commission_percent": pct, "commission_amount": round(total_sales * pct / 100, 2)}
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    client.close()
 
 
 @app.on_event("startup")

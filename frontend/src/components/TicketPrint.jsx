@@ -64,6 +64,7 @@ export default function TicketPrint({ ticket, onClose }) {
     pick4: ticket.items.filter((it) => it.game === "pick4"),
     pick5: ticket.items.filter((it) => it.game === "pick5"),
     mariage: ticket.items.filter((it) => it.game === "mariage"),
+    mariage_gratis: ticket.items.filter((it) => it.game === "mariage_gratis"),
   };
   const Section = ({ id, label, sub, color, bg, ringColor, items, icon }) => {
     if (!items?.length) return null;
@@ -163,6 +164,8 @@ export default function TicketPrint({ ticket, onClose }) {
               items={grouped.pick5} icon={<div className="font-black text-[9px] leading-none">PICK<br/><span className="text-lg">5</span><br/>★★★★★</div>} />
             <Section id="mariage" label="MARYAJ" sub="PÈYAN" color="text-orange-700" bg="bg-orange-600" ringColor="ring-orange-300"
               items={grouped.mariage} icon={<span className="text-2xl">⚭</span>} />
+            <Section id="mariage_gratis" label="MARYAJ" sub="GRATIS 🎁" color="text-pink-700" bg="bg-pink-600" ringColor="ring-pink-300"
+              items={grouped.mariage_gratis} icon={<span className="text-xl">★</span>} />
           </div>
           {/* Results if available */}
           {hasResult && ticket.result && (

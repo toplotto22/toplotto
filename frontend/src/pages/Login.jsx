@@ -104,10 +104,6 @@ export default function Login() {
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : t("signIn")}
           </Button>
         </form>
-
-        <div className="mt-6 pt-6 border-t border-white/5 text-center text-xs text-zinc-500">
-          <span className="font-mono">admin@toplotto.ht / Admin123!</span>
-        </div>
       </Card>
     </div>
   );

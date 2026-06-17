@@ -388,6 +388,7 @@ export const detectGame = (digitsCount) => {
 export const GAME_LABELS = {
   bolet: "BÒLÈT",
   mariage: "MARYAJ",
+  mariage_gratis: "MARYAJ GRATIS",
   pick3: "PICK 3",
   pick4: "PICK 4",
   pick5: "PICK 5",

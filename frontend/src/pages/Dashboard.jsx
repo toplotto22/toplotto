@@ -6,7 +6,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, PieChart, Pie, Cell, Legend,
 } from "recharts";
-import { TrendingUp, Wallet, Ticket as TicketIcon, Trophy, Banknote, ArrowUpRight } from "lucide-react";
+import { TrendingUp, Wallet, Ticket as TicketIcon, Trophy, Banknote, ArrowUpRight, Crown } from "lucide-react";
 
 const StatCard = ({ icon: Icon, label, value, sub, color = "text-yellow-400", testId }) => (
   <Card
@@ -27,12 +27,16 @@ const StatCard = ({ icon: Icon, label, value, sub, color = "text-yellow-400", te
 const PIE_COLORS = ["#FACC15", "#22C55E", "#3B82F6", "#EF4444", "#A855F7", "#F97316", "#06B6D4", "#EC4899"];
 
 export default function Dashboard() {
-  const { t, formatMoney } = useApp();
+  const { t, formatMoney, user } = useApp();
   const [stats, setStats] = useState(null);
+  const [topMachann, setTopMachann] = useState(null);
 
   useEffect(() => {
     api.get("/dashboard/stats").then((r) => setStats(r.data));
-  }, []);
+    if (["super_admin", "directeur", "superviseur", "admin"].includes(user?.role)) {
+      api.get("/dashboard/top-machann").then((r) => setTopMachann(r.data)).catch(() => {});
+    }
+  }, [user]);
 
   if (!stats) {
     return (
@@ -159,6 +163,47 @@ export default function Dashboard() {
           )}
         </Card>
       </div>
+
+      {topMachann && topMachann.ranking?.length > 0 && (
+        <Card className="bg-[#121214] border-white/5 p-5" data-testid="top-machann-panel">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xs uppercase tracking-wider text-zinc-400 font-bold flex items-center gap-2">
+              <Crown className="w-4 h-4 text-yellow-400" /> Top Machann du Mois — {topMachann.month}
+            </h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-xs uppercase tracking-wider text-zinc-500 font-bold border-b border-white/10">
+                <tr>
+                  <th className="text-left py-2 w-12">#</th>
+                  <th className="text-left py-2">{t("machann")}</th>
+                  <th className="text-right py-2">{t("ticketsSold")}</th>
+                  <th className="text-right py-2">{t("salesToday")}</th>
+                  <th className="text-right py-2 hidden sm:table-cell">Commission %</th>
+                  <th className="text-right py-2">Commission</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topMachann.ranking.map((m, i) => (
+                  <tr key={m.machann_id} className={`border-b border-white/5 ${i < 3 ? "bg-yellow-400/[0.03]" : ""}`}>
+                    <td className="py-2.5 font-mono font-bold">
+                      {i === 0 ? <span className="text-yellow-400">🥇</span> :
+                       i === 1 ? <span className="text-zinc-300">🥈</span> :
+                       i === 2 ? <span className="text-orange-400">🥉</span> :
+                       <span className="text-zinc-500">#{i + 1}</span>}
+                    </td>
+                    <td className="py-2.5 font-bold">{m.machann_name}</td>
+                    <td className="py-2.5 text-right font-mono">{m.tickets}</td>
+                    <td className="py-2.5 text-right font-mono">{formatMoney(m.sales)}</td>
+                    <td className="py-2.5 text-right font-mono text-zinc-400 hidden sm:table-cell">{m.commission_percent.toFixed(1)}%</td>
+                    <td className="py-2.5 text-right font-mono font-bold text-green-400">{formatMoney(m.commission_amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
