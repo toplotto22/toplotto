@@ -1446,29 +1446,31 @@ async def startup():
                 if update:
                     await db.lotteries.update_one({"code": lot["code"]}, {"$set": update})
 
-    # Seed / update super admin (idempotent)
+    # Seed / update super admin (fully idempotent — handles all edge cases)
     SUPER_ADMIN_EMAIL = "admin@toplotto.com"
     SUPER_ADMIN_PASSWORD = "Admin@1000"
-    existing_admin = await db.users.find_one({"role": "super_admin"})
-    if not existing_admin:
-        await db.users.insert_one({
-            "id": gen_id(), "email": SUPER_ADMIN_EMAIL,
-            "password": hash_password(SUPER_ADMIN_PASSWORD),
-            "name": "Super Admin", "role": "super_admin",
-            "active": True, "created_at": now_iso(),
-        })
-        logger.info("Seeded super admin")
-    else:
-        # Force-update email & password to current canonical values
-        await db.users.update_one(
-            {"_id": existing_admin["_id"]},
-            {"$set": {
-                "email": SUPER_ADMIN_EMAIL,
+
+    # 1. Remove any stale super_admin users with a different email (e.g. old admin@toplotto.ht)
+    await db.users.delete_many({
+        "role": "super_admin",
+        "email": {"$ne": SUPER_ADMIN_EMAIL},
+    })
+
+    # 2. Upsert canonical super_admin by email (works whether user exists or not, any role)
+    await db.users.update_one(
+        {"email": SUPER_ADMIN_EMAIL},
+        {
+            "$set": {
                 "password": hash_password(SUPER_ADMIN_PASSWORD),
+                "name": "Super Admin",
+                "role": "super_admin",
                 "active": True,
-            }},
-        )
-        logger.info("Updated super admin credentials")
+            },
+            "$setOnInsert": {"id": gen_id(), "created_at": now_iso()},
+        },
+        upsert=True,
+    )
+    logger.info(f"Super admin ready: {SUPER_ADMIN_EMAIL}")
 
     if not await db.agencies.find_one({}):
         await db.agencies.insert_one({
