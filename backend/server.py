@@ -521,6 +521,78 @@ async def duplicate_ticket(ticket_number: str, user=Depends(current_user)):
     return await create_ticket(payload, user)
 
 
+@api.post("/tickets/recalculate")
+async def recalculate_all_tickets(
+    draw_date: Optional[str] = None,
+    user=Depends(require_roles("super_admin", "admin")),
+):
+    """Recalculate win status for all tickets (optionally filtered by draw_date).
+    Useful after fixing a result or when status got out of sync."""
+    settings = await get_settings_doc()
+    payouts_cfg = settings.get("payouts", {})
+    q = {"status": {"$ne": "cancelled"}}
+    if draw_date:
+        q["draw_date"] = draw_date
+    recalculated = 0
+    fixed_to_won = 0
+    fixed_to_lost = 0
+    async for t in db.tickets.find(q, {"_id": 0}):
+        ticket_lotteries = t.get("lottery_ids") or [t.get("lottery_id")]
+        ticket_lotteries = [lid for lid in ticket_lotteries if lid]
+        if not ticket_lotteries:
+            continue
+        results_by_lottery = {}
+        for lid in ticket_lotteries:
+            r = await db.results.find_one({"lottery_id": lid, "draw_date": t["draw_date"]}, {"_id": 0})
+            if r:
+                results_by_lottery[lid] = r
+        if not results_by_lottery:
+            continue
+        win_total = 0.0
+        new_items = []
+        for it in t["items"]:
+            best_won = False
+            best_pos = 0
+            best_key = ""
+            item_payout = 0.0
+            unit_amount = float(it.get("unit_amount", it.get("amount", 0)))
+            unit_item = {**it, "amount": unit_amount}
+            for _lid, r in results_by_lottery.items():
+                w, p, k = check_win(unit_item, r)
+                if w:
+                    pay = compute_payout(unit_item, r, payouts_cfg, settings.get("gratis"))
+                    item_payout += pay
+                    if not best_won:
+                        best_won, best_pos, best_key = w, p, k
+            it["winning"] = best_won
+            it["win_position"] = best_pos
+            it["win_key"] = best_key
+            it["payout"] = round(item_payout, 2)
+            win_total += item_payout
+            new_items.append(it)
+        all_results = len(results_by_lottery) == len(ticket_lotteries)
+        if win_total > 0:
+            new_status = "won"
+        elif all_results:
+            new_status = "lost"
+        else:
+            new_status = "active"
+        old_status = t.get("status", "active")
+        await db.tickets.update_one(
+            {"id": t["id"]},
+            {"$set": {"items": new_items, "payout_amount": round(win_total, 2),
+                      "has_result": all_results, "status": new_status}},
+        )
+        recalculated += 1
+        if old_status != new_status:
+            if new_status == "won":
+                fixed_to_won += 1
+            elif new_status == "lost":
+                fixed_to_lost += 1
+    await audit(user["id"], "tickets.recalculate", {"date": draw_date, "count": recalculated})
+    return {"recalculated": recalculated, "fixed_to_won": fixed_to_won, "fixed_to_lost": fixed_to_lost}
+
+
 @api.get("/tickets")
 async def list_tickets(
     user=Depends(current_user),

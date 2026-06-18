@@ -15,6 +15,20 @@ PWA de gestion de loterie haïtienne/brésilienne avec rôles, ventes POS, résu
 - **Frontend**: React 19 + React Router + Tailwind + shadcn/ui + recharts; AppContext (auth/i18n/currency)
 - **Style**: Dark theme, Gold (#FACC15) primary, IBM Plex Mono pour nombres, Chivo pour titres
 
+## Implementations V9 (June 2026) — Mobile UX + winners + PWA auto-update
+- [x] **PWA auto-update aggressive**: SW network-first sur HTML+JS+CSS bundles. Auto-check toutes les 5 min. Quand une nouvelle version est détectée, l'app se recharge automatiquement (les utilisateurs installés reçoivent les MAJ sans intervention)
+- [x] **Indicateur "En ligne" maintenant visible sur mobile** (avant `hidden sm:flex` masquait sur petits écrans)
+- [x] **Highlight visuel des numéros gagnants** dans ticket UI: 
+  - Numéro gagnant en vert avec 🏆
+  - Badge "1YE/2YEM/3YEM" ou "GENYEN" 
+  - Montant gagné affiché en gros vert "+R$ X.XX" à côté du numéro
+  - Mise initial barrée
+- [x] **Bouton "Marquer Payé" 💲** sur chaque ticket gagnant (super_admin/admin)
+- [x] **Bouton raccourci "🏆 Gagnants"** filtre instantanément tickets gagnants
+- [x] **Bouton "🔄 Recalculer"** force le recalcul des statuts gagnant/perdu pour aujourd'hui (debug bug)
+- [x] **Endpoint backend `POST /api/tickets/recalculate?draw_date=YYYY-MM-DD`**: retraite tous les tickets, retourne `{recalculated, fixed_to_won, fixed_to_lost}`
+- [x] **Tests V9**: regression V8 6/6 + recalculate endpoint testé manuellement (17 tickets traités OK)
+
 ## Implementations V8 (June 2026) — Multi-lottery, Replay, PDF lang, time fix
 - [x] **Bug timezone PDF corrigé**: les dates/heures sur les PDF utilisent maintenant `format_haiti_dt()` (conversion UTC→Haiti TZ), alignées avec l'affichage app
 - [x] **Logo PDF parfaitement rond**: génération PIL avec masque circulaire alpha (cache `logo_circle.png`)

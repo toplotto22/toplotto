@@ -134,22 +134,22 @@ export default function Layout() {
             <span className="font-black text-sm">TOP LOTTO</span>
           </div>
           <div className="flex items-center gap-1 sm:gap-2 ml-auto">
-            {/* Online/offline + pending sync */}
+            {/* Online/offline + pending sync — visible on mobile too */}
             <button
               data-testid="online-indicator"
               onClick={triggerSync}
               title={online ? t("online") : t("offline")}
-              className={`hidden sm:flex items-center gap-1 px-2 py-1 rounded-md text-[10px] uppercase tracking-wider font-bold border transition-colors ${
+              className={`flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-md text-[9px] sm:text-[10px] uppercase tracking-wider font-bold border transition-colors ${
                 online
                   ? "bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20"
                   : "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20"
               }`}
             >
               {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-              <span>{online ? t("online") : t("offline")}</span>
+              <span className="hidden xs:inline sm:inline">{online ? t("online") : t("offline")}</span>
               {pending > 0 && (
-                <span className="ml-1 px-1 bg-yellow-400 text-black rounded font-mono">
-                  {pending} <RefreshCw className="w-2.5 h-2.5 inline -mt-0.5" />
+                <span className="ml-0.5 px-1 bg-yellow-400 text-black rounded font-mono">
+                  {pending}<RefreshCw className="w-2.5 h-2.5 inline -mt-0.5 ml-0.5" />
                 </span>
               )}
             </button>

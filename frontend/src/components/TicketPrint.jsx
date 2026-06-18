@@ -80,17 +80,25 @@ export default function TicketPrint({ ticket, onClose }) {
         </div>
         <div className="flex-1 space-y-0.5 text-right">
           {items.map((it, i) => (
-            <div key={i} className="flex items-center justify-between text-sm">
-              <span className={`font-mono font-bold ${color} ${it.winning ? "underline decoration-2 decoration-green-600" : ""}`}>
+            <div key={i} className={`flex items-center justify-between text-sm ${it.winning ? "bg-green-100 -mx-1 px-1 py-0.5 rounded" : ""}`}>
+              <span className={`font-mono font-bold ${it.winning ? "text-green-700 text-base" : color}`}>
+                {it.winning && <span className="mr-1">🏆</span>}
                 {it.number}
                 {it.winning && (
-                  <span className="ml-1 text-[8px] bg-green-600 text-white px-1 rounded font-bold">
-                    {id === "bolet" ? ["", "1YE", "2YEM", "3YEM"][it.win_position] : "★"}
+                  <span className="ml-1 text-[9px] bg-green-600 text-white px-1.5 py-0.5 rounded-full font-black">
+                    {id === "bolet" ? ["", "1YE", "2YEM", "3YEM"][it.win_position] : "GENYEN"}
                   </span>
                 )}
               </span>
               <span className="text-[10px] flex-1 mx-1 border-b border-dotted border-zinc-400 mb-1" />
-              <span className={`font-mono font-bold ${color}`}>R$ {Number(it.line_total ?? it.amount).toFixed(2)}</span>
+              <span className="flex flex-col items-end gap-0.5">
+                <span className={`font-mono font-bold ${color} ${it.winning ? "line-through text-zinc-400 text-[10px]" : ""}`}>R$ {Number(it.line_total ?? it.amount).toFixed(2)}</span>
+                {it.winning && (
+                  <span className="font-mono font-black text-green-700 text-base bg-green-200 px-2 rounded">
+                    +R$ {Number(it.payout || 0).toFixed(2)}
+                  </span>
+                )}
+              </span>
             </div>
           ))}
         </div>

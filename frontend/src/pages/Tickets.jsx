@@ -15,7 +15,7 @@ import {
   AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader,
   AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
 } from "@/components/ui/alert-dialog";
-import { Search, Eye, Edit2, Trash2, Ban, Trash, Filter as FilterIcon, AlertTriangle, RotateCcw } from "lucide-react";
+import { Search, Eye, Edit2, Trash2, Ban, Trash, Filter as FilterIcon, AlertTriangle, RotateCcw, DollarSign, Trophy, RefreshCw } from "lucide-react";
 import TicketPrint from "@/components/TicketPrint";
 import { toast } from "sonner";
 import { GAME_LABELS } from "@/lib/i18n";
@@ -93,6 +93,23 @@ export default function Tickets() {
     } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
   };
 
+  const markPaid = async (num) => {
+    try {
+      const { data } = await api.post(`/tickets/${num}/pay`);
+      toast.success(`Peyman fèt — R$ ${(data.amount || 0).toFixed(2)} ✓`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
+  };
+
+  const recalcAll = async () => {
+    try {
+      const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Port-au-Prince" });
+      const { data } = await api.post(`/tickets/recalculate?draw_date=${today}`);
+      toast.success(`Recalcul: ${data.recalculated} tickets • ${data.fixed_to_won} → gagnés • ${data.fixed_to_lost} → perdus`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
+  };
+
   const openTicket = async (num) => {
     const { data } = await api.get(`/tickets/${num}`);
     setView(data);
@@ -161,9 +178,24 @@ export default function Tickets() {
 
   return (
     <div className="space-y-4" data-testid="tickets-page">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <h1 className="text-2xl sm:text-4xl font-black tracking-tighter">{t("tickets")}</h1>
-        <span className="text-xs text-zinc-500 font-mono">{filtered.length} / {tickets.length}</span>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => setStatusFilter("won")}
+            data-testid="quick-winners"
+            className={`h-9 px-3 text-xs font-bold ${statusFilter === "won" ? "bg-green-500 text-black" : "bg-green-500/10 text-green-400 border border-green-500/30 hover:bg-green-500/20"}`}>
+            <Trophy className="w-3.5 h-3.5 mr-1" /> Gagnants
+          </Button>
+          {isAdmin && (
+            <Button onClick={recalcAll} data-testid="recalc-tickets"
+              title="Recalculer les statuts gagnant/perdu"
+              className="h-9 px-3 text-xs bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20">
+              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Recalculer
+            </Button>
+          )}
+          <span className="text-xs text-zinc-500 font-mono">{filtered.length} / {tickets.length}</span>
+        </div>
       </div>
 
       {/* Filters */}
@@ -350,6 +382,15 @@ export default function Tickets() {
                           className="text-green-400 hover:bg-green-400/10 h-7 w-7 p-0">
                           <RotateCcw className="w-3.5 h-3.5" />
                         </Button>
+                        {isAdmin && tk.payout_amount > 0 && !tk.paid && (
+                          <Button size="sm" variant="ghost"
+                            data-testid={`ticket-pay-${tk.ticket_number}`}
+                            onClick={() => markPaid(tk.ticket_number)}
+                            title="Marquer comme payé"
+                            className="text-emerald-400 hover:bg-emerald-400/10 h-7 w-7 p-0">
+                            <DollarSign className="w-3.5 h-3.5" />
+                          </Button>
+                        )}
                         {isSuperAdmin && tk.status !== "cancelled" && (
                           <Button size="sm" variant="ghost"
                             data-testid={`ticket-edit-${tk.ticket_number}`}
@@ -420,6 +461,14 @@ export default function Tickets() {
                     className="text-green-400 hover:bg-green-400/10 h-8 w-8 p-0">
                     <RotateCcw className="w-4 h-4" />
                   </Button>
+                  {isAdmin && tk.payout_amount > 0 && !tk.paid && (
+                    <Button size="sm" variant="ghost"
+                      onClick={() => markPaid(tk.ticket_number)}
+                      title="Payer"
+                      className="text-emerald-400 hover:bg-emerald-400/10 h-8 w-8 p-0">
+                      <DollarSign className="w-4 h-4" />
+                    </Button>
+                  )}
                   {isSuperAdmin && tk.status !== "cancelled" && (
                     <Button size="sm" variant="ghost"
                       onClick={() => openEdit(tk.ticket_number)}
