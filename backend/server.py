@@ -1041,11 +1041,31 @@ async def get_settings_doc():
             "payouts": DEFAULT_PAYOUTS,
             "limits": DEFAULT_LIMITS,
             "gratis": DEFAULT_GRATIS,
+            "blocked_bolet": [],
+            "lottery_api_token": "",
+            "lottery_api_url": "https://www.lotteryresultsfeed.com/api",
+            "auto_import_enabled": True,
+            "auto_import_interval_minutes": 30,
         }
         await db.settings.insert_one(doc)
-    elif "gratis" not in doc:
-        await db.settings.update_one({"id": "global"}, {"$set": {"gratis": DEFAULT_GRATIS}})
-        doc["gratis"] = DEFAULT_GRATIS
+    else:
+        # Backfill new defaults for upgraded installs (idempotent)
+        backfill = {}
+        if "gratis" not in doc:
+            backfill["gratis"] = DEFAULT_GRATIS
+        if "blocked_bolet" not in doc:
+            backfill["blocked_bolet"] = []
+        if "lottery_api_token" not in doc:
+            backfill["lottery_api_token"] = ""
+        if "lottery_api_url" not in doc:
+            backfill["lottery_api_url"] = "https://www.lotteryresultsfeed.com/api"
+        if "auto_import_enabled" not in doc:
+            backfill["auto_import_enabled"] = True
+        if "auto_import_interval_minutes" not in doc:
+            backfill["auto_import_interval_minutes"] = 30
+        if backfill:
+            await db.settings.update_one({"id": "global"}, {"$set": backfill})
+            doc.update(backfill)
     return doc
 
 

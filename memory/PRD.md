@@ -15,6 +15,31 @@ PWA de gestion de loterie haïtienne/brésilienne avec rôles, ventes POS, résu
 - **Frontend**: React 19 + React Router + Tailwind + shadcn/ui + recharts; AppContext (auth/i18n/currency)
 - **Style**: Dark theme, Gold (#FACC15) primary, IBM Plex Mono pour nombres, Chivo pour titres
 
+## Implementations V5 (June 2026) — Production deploy + UX features
+- [x] **Render deployment**: Frontend Live ✅ + Backend Live ✅ (Python 3.12.7 via PYTHON_VERSION env var)
+- [x] **Super admin credentials updated**: admin@toplotto.com / Admin@1000 (force-update idempotent on every startup)
+- [x] **Sales page crash fixed** — `settings is not defined` (destructure ajouté ligne 24)
+- [x] **Haiti timezone (America/Port-au-Prince)** appliqué globalement:
+  - Backend: `now_haiti()` helper utilisé pour ticket_number prefix, dashboard "today", top-machann month, trend 7 jours
+  - Frontend: `lib/time.js` helper `todayHaiti()` utilisé dans Sales/Results/Reports/Admin
+- [x] **Ticket status auto-update** sur POST /api/results et import API: status devient `won` si payout > 0, sinon `lost` (avant restait "active")
+- [x] **Tickets page refonte complète**:
+  - Filtres: recherche, statut (Tous/En attente/Gagné/Perdu/Payé/Annulé), loterie, tirage (midi/soir), date
+  - Mobile responsive: cards affichent Loterie / Tirage / Machann clairement
+  - Bulk delete (super_admin): "Suppr. par jour" + "Suppr. TOUT" avec confirmation AlertDialog
+  - Endpoints backend: `DELETE /api/tickets/bulk/by-date?draw_date=X` et `DELETE /api/tickets/bulk/all`
+- [x] **Reports** — ligne TOTAL (bordure jaune) en bas du tableau avec sommes tickets/ventes/gagnants/paiements/profit
+- [x] **Boules bòlèt bloquées (super_admin)**:
+  - Nouvel onglet "Boules bloquées" dans Paramètres
+  - Validation backend: rejette POST /api/tickets si boul bolet ou partie de mariage est bloquée → 400 "Boul XX bloqué"
+  - UI: input multi-numéros + grille cliquable pour débloquer
+- [x] **Import API automatique** (lotteryresultsfeed.com):
+  - Nouvel onglet "API Auto" dans Paramètres: token, URL, enabled, interval
+  - Background scheduler `asyncio.create_task(auto_import_loop())` au démarrage
+  - Met à jour automatiquement résultats + statuts tickets toutes les X minutes (configurable, défaut 30)
+- [x] **Manifest PWA**: ajout `<meta name="mobile-web-app-capable">` (warning obsolète résolu)
+- [x] **Tests V5**: 21/21 pytest pass, frontend UI verifié à 100%
+
 ## Implementations V4 (Feb 2026)
 - [x] **Logo TOP LOTTO** intégré dans `/app/frontend/src/assets/logo.jpeg` + composant `<Logo>` rond avec ring doré, utilisé dans sidebar, drawer mobile, login, et ticket print
 - [x] **Ticket redesign** style colorful (sections BÒLÈT rouge / PICK 3 vert / PICK 4 bleu / PICK 5 violet / MARYAJ orange / GRATIS rose) avec header bleu marine, logo rond doré, total banner, barcode + footer www.toplotto.com — fidèle à l'exemple fourni
