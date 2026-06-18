@@ -3,6 +3,7 @@ import { useApp } from "@/lib/context";
 import api from "@/lib/api";
 import { detectGame, GAME_LABELS } from "@/lib/i18n";
 import { queueTicket, isOnline } from "@/lib/offline";
+import { todayHaiti } from "@/lib/time";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,7 +24,7 @@ const AUTO_DOUBLES = ["00", "11", "22", "33", "44", "55", "66", "77", "88", "99"
 export default function Sales() {
   const { t, lotteries, currency, formatMoney, user, settings } = useApp();
   const [lotteryId, setLotteryId] = useState("");
-  const [drawDate, setDrawDate] = useState(new Date().toISOString().slice(0, 10));
+  const [drawDate, setDrawDate] = useState(todayHaiti());
   const [number, setNumber] = useState("");
   const [amount, setAmount] = useState("");
   const [customer, setCustomer] = useState("");

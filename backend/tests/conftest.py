@@ -7,8 +7,8 @@ from pathlib import Path
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://lottery-hub-48.preview.emergentagent.com").rstrip("/")
-ADMIN_EMAIL = "admin@toplotto.ht"
-ADMIN_PASSWORD = "Admin123!"
+ADMIN_EMAIL = "admin@toplotto.com"
+ADMIN_PASSWORD = "Admin@1000"
 
 
 @pytest.fixture(scope="session")

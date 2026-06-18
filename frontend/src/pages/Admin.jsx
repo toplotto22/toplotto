@@ -20,6 +20,7 @@ import { ROLES } from "@/lib/i18n";
 import { toast } from "sonner";
 import { UserPlus, Building2, Save, Edit2, Trash2, Printer as PrinterIcon, Download, Loader2 } from "lucide-react";
 import { getPrinterConfig, setPrinterConfig } from "@/lib/printer";
+import { todayHaiti } from "@/lib/time";
 
 const initialUser = { email: "", password: "", name: "", role: "machann", agency_id: "", phone: "", commission_percent: "" };
 const initialAgency = { name: "", address: "", phone: "" };
@@ -42,7 +43,7 @@ export default function Admin() {
   const importResults = async () => {
     setImporting(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayHaiti();
       const { data } = await api.post(`/results/import?date=${today}`);
       toast.success(`${data.imported} loteries importées`);
     } catch (err) {
@@ -160,6 +161,16 @@ export default function Admin() {
           <TabsTrigger value="lotteries" data-testid="tab-lotteries" className="data-[state=active]:bg-yellow-400 data-[state=active]:text-black">
             {t("lotteries")}
           </TabsTrigger>
+          {isSuperAdmin && (
+            <TabsTrigger value="blocked" data-testid="tab-blocked" className="data-[state=active]:bg-red-500 data-[state=active]:text-white">
+              Boules bloquées
+            </TabsTrigger>
+          )}
+          {isSuperAdmin && (
+            <TabsTrigger value="autoapi" data-testid="tab-autoapi" className="data-[state=active]:bg-green-500 data-[state=active]:text-black">
+              API Auto
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="users" className="mt-4">
@@ -426,6 +437,16 @@ export default function Admin() {
             </div>
           )}
         </TabsContent>
+        {isSuperAdmin && (
+          <TabsContent value="blocked" className="mt-4">
+            {settings && <BlockedBoletPanel settings={settings} setSettings={setSettings} saveSettings={saveSettings} />}
+          </TabsContent>
+        )}
+        {isSuperAdmin && (
+          <TabsContent value="autoapi" className="mt-4">
+            {settings && <AutoApiPanel settings={settings} setSettings={setSettings} saveSettings={saveSettings} />}
+          </TabsContent>
+        )}
         <TabsContent value="printer" className="mt-4">
           <Card className="bg-[#121214] border-white/5 p-4 sm:p-5 space-y-4">
             <h3 className="text-sm uppercase tracking-wider text-zinc-400 font-bold flex items-center gap-2">
@@ -565,7 +586,7 @@ export default function Admin() {
               </table>
             </div>
             <div className="mt-4 text-xs text-zinc-500 bg-zinc-900/50 p-3 rounded border border-white/5">
-              <b className="text-yellow-400 uppercase">Import API</b> : récupère Pick 3 + Pick 4 depuis lotteryresultsfeed.com pour la date du jour et calcule automatiquement les gagnants pour tous les tickets concernés. Bouton "Importer résultats API" en haut.<br/>
+              <b className="text-yellow-400 uppercase">Import API</b> : récupère Pick 3 + Pick 4 depuis lotteryresultsfeed.com pour la date du jour et calcule automatiquement les gagnants pour tous les tickets concernés. Bouton &quot;Importer résultats API&quot; en haut.<br/>
               <b className="text-yellow-400 uppercase">Horaires</b> : modifiables. Les ventes ferment automatiquement <b>{lotteries[0]?.close_offset_minutes || 5} min</b> avant le tirage local (timezone ET ou CT respectée).
             </div>
           </Card>
@@ -631,5 +652,163 @@ export default function Admin() {
         </Dialog>
       )}
     </div>
+  );
+}
+
+function BlockedBoletPanel({ settings, setSettings, saveSettings }) {
+  const [input, setInput] = React.useState("");
+  const blocked = Array.isArray(settings.blocked_bolet) ? settings.blocked_bolet : [];
+
+  const addBlocked = () => {
+    const cleaned = input.split(/[\s,]+/)
+      .map((x) => x.trim())
+      .filter((x) => /^\d{2}$/.test(x));
+    if (cleaned.length === 0) {
+      toast.error("Entrez des boules valides (2 chiffres, ex: 05, 12, 99)");
+      return;
+    }
+    const newSet = Array.from(new Set([...blocked, ...cleaned])).sort();
+    setSettings({ ...settings, blocked_bolet: newSet });
+    setInput("");
+  };
+
+  const removeBlocked = (b) => {
+    setSettings({ ...settings, blocked_bolet: blocked.filter((x) => x !== b) });
+  };
+
+  const clearAll = () => {
+    setSettings({ ...settings, blocked_bolet: [] });
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card className="bg-[#121214] border-red-500/20 p-4 sm:p-5 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h3 className="text-sm uppercase tracking-wider text-red-400 font-bold">Boules BÒLÈT bloquées</h3>
+            <p className="text-xs text-zinc-500 mt-1">
+              Les marchands ne pourront pas vendre ces boules (Bòlèt, Mariage et Maryaj Gratis).
+            </p>
+          </div>
+          <span className="px-3 py-1 bg-red-500/10 border border-red-500/30 rounded text-red-400 font-mono text-sm font-bold">
+            {blocked.length} bloquée(s)
+          </span>
+        </div>
+
+        <div className="flex gap-2 flex-wrap">
+          <Input
+            data-testid="blocked-input"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ex: 05, 12, 99 (séparés par espace ou virgule)"
+            className="bg-zinc-900 border-white/10 font-mono flex-1 min-w-[200px]"
+            onKeyDown={(e) => { if (e.key === "Enter") addBlocked(); }}
+          />
+          <Button data-testid="blocked-add" onClick={addBlocked}
+            className="bg-red-500 hover:bg-red-600 text-white font-bold">
+            Bloquer
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-1.5 max-h-72 overflow-y-auto p-2 bg-zinc-950/50 rounded border border-white/5">
+          {blocked.length === 0 ? (
+            <div className="col-span-full text-center text-zinc-600 py-6 text-sm">Aucune boule bloquée</div>
+          ) : blocked.map((b) => (
+            <button
+              key={b}
+              data-testid={`blocked-${b}`}
+              onClick={() => removeBlocked(b)}
+              className="font-mono font-bold text-sm py-2 rounded bg-red-500/20 border border-red-500/40 text-red-300 hover:bg-red-500/40 hover:text-white transition"
+              title="Cliquer pour débloquer"
+            >
+              {b}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex gap-2 pt-2">
+          {blocked.length > 0 && (
+            <Button onClick={clearAll} variant="outline"
+              className="bg-zinc-900 border-white/10 hover:bg-zinc-800 text-zinc-300">
+              Tout débloquer
+            </Button>
+          )}
+          <div className="flex-1" />
+          <Button data-testid="blocked-save" onClick={saveSettings}
+            className="bg-yellow-400 hover:bg-yellow-500 text-black font-bold glow-gold">
+            <Save className="w-4 h-4 mr-2" /> Enregistrer
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function AutoApiPanel({ settings, setSettings, saveSettings }) {
+  return (
+    <Card className="bg-[#121214] border-green-500/20 p-4 sm:p-5 space-y-4">
+      <div>
+        <h3 className="text-sm uppercase tracking-wider text-green-400 font-bold">Import automatique des résultats</h3>
+        <p className="text-xs text-zinc-500 mt-1">
+          Configure l&apos;API lotteryresultsfeed.com et l&apos;intervalle d&apos;import auto en arrière-plan.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <Label className="text-xs uppercase text-zinc-400">Token API</Label>
+          <Input data-testid="api-token"
+            type="password"
+            value={settings.lottery_api_token || ""}
+            onChange={(e) => setSettings({ ...settings, lottery_api_token: e.target.value })}
+            placeholder="Bearer token..."
+            className="bg-zinc-900 border-white/10 mt-1 font-mono"
+          />
+        </div>
+        <div>
+          <Label className="text-xs uppercase text-zinc-400">URL de base</Label>
+          <Input data-testid="api-url"
+            value={settings.lottery_api_url || ""}
+            onChange={(e) => setSettings({ ...settings, lottery_api_url: e.target.value })}
+            placeholder="https://www.lotteryresultsfeed.com/api"
+            className="bg-zinc-900 border-white/10 mt-1 font-mono"
+          />
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            id="auto-import-enabled"
+            data-testid="api-auto-enabled"
+            type="checkbox"
+            checked={settings.auto_import_enabled !== false}
+            onChange={(e) => setSettings({ ...settings, auto_import_enabled: e.target.checked })}
+            className="w-5 h-5 accent-green-500"
+          />
+          <label htmlFor="auto-import-enabled" className="text-sm text-zinc-300 cursor-pointer">
+            Activer l&apos;import automatique
+          </label>
+        </div>
+        <div>
+          <Label className="text-xs uppercase text-zinc-400">Intervalle (minutes)</Label>
+          <Input data-testid="api-interval"
+            type="number"
+            min="5"
+            value={settings.auto_import_interval_minutes ?? 30}
+            onChange={(e) => setSettings({ ...settings, auto_import_interval_minutes: parseInt(e.target.value) || 30 })}
+            className="bg-zinc-900 border-white/10 mt-1 font-mono"
+          />
+        </div>
+      </div>
+
+      <div className="text-xs text-zinc-500 p-3 bg-zinc-900/50 rounded border border-white/5">
+        Le scheduler tourne en arrière-plan dès le démarrage du backend.
+        Tous les <strong className="text-green-400">{settings.auto_import_interval_minutes ?? 30} min</strong>, il appelle l&apos;API pour la date du jour (heure d&apos;Haïti)
+        et met à jour automatiquement le statut <strong>gagné/perdu</strong> de tous les tickets.
+      </div>
+
+      <Button data-testid="api-save" onClick={saveSettings}
+        className="bg-green-500 hover:bg-green-600 text-black font-bold">
+        <Save className="w-4 h-4 mr-2" /> Enregistrer
+      </Button>
+    </Card>
   );
 }

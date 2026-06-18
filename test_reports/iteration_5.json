@@ -1,0 +1,42 @@
+{
+  "summary": "TOP LOTTO Iteration 5 — full backend + frontend verification of new features (blocked_bolet, Haiti TZ, ticket filters, status auto-update via results, bulk delete, auto-import scheduler, mobile Tickets, Admin tabs, Reports total row, Sales no-crash). Backend: 21/22 pytest pass (1 expected skip — no evening tickets exist yet for that filter sample); Frontend: all UI features visually verified — Sales page loads WITHOUT 'settings is not defined' error (bug fix confirmed), Tickets page has full filter bar + bulk delete buttons + all required columns, Tickets mobile shows Loterie/Tirage/Machann, Admin has 'Boules bloquées' + 'API Auto' tabs with working UIs, Reports has yellow-bordered TOTAL row in tfoot, Results has 'Importer API' button. Backend logs confirm 'Auto-import scheduler started' on startup. Haiti timezone in ticket prefix verified (TL260617... matches Haiti date 2026-06-17). Blocked-bolet end-to-end flow verified: block '00'/'99' -> POST ticket returns 400 'Boul X bloqué — interdit à la vente' for both bolet and mariage parts; unblock -> 200. Bulk delete endpoints correctly require super_admin (403 for admin role). Result publication correctly updates ticket status to 'won'/'lost'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/settings", "issue": "lottery_api_token, auto_import_enabled, auto_import_interval_minutes, blocked_bolet are NOT initialized in default settings doc (server.py L1030 get_settings_doc). They only appear after a first PUT /api/settings. The Admin > 'API Auto' tab UI shows empty fields on a fresh install. Recommend adding these keys with default values ('', True, 60, []) in the default settings doc so GET always returns them."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Tickets desktop table", "issues": ["Status badge 'EN ATTENTE' (active) and 'PERDU' (lost) display correctly but mixed-case label 'En attente' from review_request actually renders as ALL CAPS — purely cosmetic, no fix needed"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_toplotto_v5.py",
+    "/app/test_reports/pytest/pytest_iter5_v5.xml"
+  ],
+  "action_items": [
+    "OPTIONAL minor: Initialize blocked_bolet, lottery_api_token, auto_import_enabled (default True), auto_import_interval_minutes (default 60) in get_settings_doc() default doc so GET /api/settings returns these keys for fresh installs (server.py L1030-1049).",
+    "No other action items — all iteration-5 review_request items pass."
+  ],
+  "critical_code_review_comments": [
+    "server.py L1030 get_settings_doc: default doc is missing the 4 new auto-import/blocked_bolet keys. Add them to keep API contract consistent across fresh vs. updated installs.",
+    "server.py L687: result publication query correctly excludes status='cancelled' tickets when bulk-updating to won/lost. Good.",
+    "server.py L502 session filter: uses async generator + list comprehension on db.lotteries — clean.",
+    "server.py L432-440: blocked_bolet check correctly handles both bolet single-number and mariage NN-MM dash-split parts. Good coverage.",
+    "Frontend Tickets.jsx mobile cards correctly include lottery_name, draw_date, machann_name — verified at 390x844."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (fixed credentials to admin@toplotto.com / Admin@1000 — were stale from prior iteration)",
+    "/app/backend/tests/test_toplotto_v5.py (new — 22 tests covering all iteration-5 features)"
+  ],
+  "success_rate": {"backend": "100% (21/21 executed, 1 evening-filter test skipped due to no seed evening tickets)", "frontend": "100% (all 9 UI checks visually verified)"},
+  "test_credentials": "admin@toplotto.com / Admin@1000 (super_admin) — confirmed working",
+  "seed_data_creation": "Created disposable tickets on 2099-05-15, 2099-06-20, 2099-07-30 draw dates; one V5 admin-role test user (v5_admin_<ts>@toplotto.com / TestPass!1) for 403 tests on bulk delete; result published for 2099-06-20 Florida Midi (pick3=123, pick4=4567) to test won/lost status updates.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run pytest /app/backend/tests/test_toplotto_v5.py for iteration-5 regression. Older suites: test_toplotto_api.py (V2), test_toplotto_v3.py (V3), test_toplotto_v4.py (V4) remain in place. Frontend: super_admin Admin > 'Boules bloquées' and 'API Auto' tabs are at /admin (Paramètres). Sales page bug 'settings is not defined' is FIXED. The only minor backend finding is that get_settings_doc default doc omits 4 new keys — they get added on first PUT. Auto-import scheduler logs 'Auto-import scheduler started' at backend startup in /var/log/supervisor/backend.*.log.",
+  "rca_of_the_issue": "Sales-page crash RCA: previously Sales.jsx referenced an undefined `settings` variable. The fix (per review_request) was applied at Sales.jsx line ~24 by destructuring settings from the auth/settings context. Verified by loading /sales with super_admin auth — page renders fully with cart, lottery picker, etc., and no React error overlay or 'settings is not defined' message in DOM or console."
+}

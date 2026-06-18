@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import api from "@/lib/api";
 import { useApp } from "@/lib/context";
+import { todayHaiti } from "@/lib/time";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,7 +24,7 @@ const STATE_TEXT = {
 
 export default function Results() {
   const { t, lotteries, user, lang } = useApp();
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayHaiti());
   const [draws, setDraws] = useState({}); // lottery_id -> {pick3, pick4, pick5, bolet[3]}
   const canEdit = ["super_admin", "admin", "directeur"].includes(user?.role);
 

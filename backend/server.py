@@ -16,6 +16,7 @@ import io
 import csv
 import socket
 import httpx
+import asyncio
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
@@ -47,6 +48,13 @@ logging.basicConfig(level=logging.INFO)
 
 
 # ---------- Utils ----------
+HAITI_TZ = ZoneInfo("America/Port-au-Prince")
+
+
+def now_haiti():
+    return datetime.now(HAITI_TZ)
+
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -193,6 +201,12 @@ class SettingsUpdate(BaseModel):
     exchange_rate_brl_to_htg: Optional[float] = None
     payouts: Optional[Dict[str, Any]] = None
     limits: Optional[Dict[str, Any]] = None
+    blocked_bolet: Optional[List[str]] = None
+    lottery_api_token: Optional[str] = None
+    lottery_api_url: Optional[str] = None
+    auto_import_enabled: Optional[bool] = None
+    auto_import_interval_minutes: Optional[int] = None
+    gratis: Optional[Dict[str, Any]] = None
 
 
 # ---------- Auth ----------
@@ -414,6 +428,17 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
         if len(gratis_items) > int(gratis_cfg.get("count", 2)):
             raise HTTPException(400, f"Maximum {gratis_cfg.get('count', 2)} maryaj gratis par ticket")
 
+    # Validate blocked bolet numbers (Super Admin control)
+    blocked = set(settings.get("blocked_bolet") or [])
+    if blocked:
+        for it in data.items:
+            if it.game == "bolet" and it.number in blocked:
+                raise HTTPException(400, f"Boul {it.number} bloqué — interdit à la vente")
+            if it.game in ("mariage", "mariage_gratis"):
+                for part in (it.number or "").split("-"):
+                    if part in blocked:
+                        raise HTTPException(400, f"Boul {part} bloqué — interdit à la vente")
+
     items = []
     total = 0.0
     for it in data.items:
@@ -426,7 +451,7 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
         upsert=True, return_document=ReturnDocument.AFTER,
     )
     seq = (seq_doc or {}).get("value", 1)
-    ticket_number = f"TL{datetime.now().strftime('%y%m%d')}{seq:05d}"
+    ticket_number = f"TL{now_haiti().strftime('%y%m%d')}{seq:05d}"
 
     doc = {
         "id": gen_id(), "ticket_number": ticket_number,
@@ -453,7 +478,9 @@ async def list_tickets(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     lottery_id: Optional[str] = None,
-    limit: int = 200,
+    status: Optional[str] = None,
+    session: Optional[str] = None,
+    limit: int = 500,
 ):
     q = {}
     if user["role"] == "machann":
@@ -464,6 +491,17 @@ async def list_tickets(
         q["agency_id"] = agency_id
     if lottery_id:
         q["lottery_id"] = lottery_id
+    if status:
+        # support pseudo statuses: won/lost/paid/cancelled/active
+        if status == "paid":
+            q["paid"] = True
+        elif status in ("won", "lost", "cancelled", "active"):
+            q["status"] = status
+    if session:
+        # filter by lottery session (midday/evening)
+        sess_lotteries = [lt["id"] async for lt in db.lotteries.find({"session": session}, {"_id": 0, "id": 1})]
+        if sess_lotteries:
+            q["lottery_id"] = {"$in": sess_lotteries} if not lottery_id else lottery_id
     if date_from or date_to:
         q["draw_date"] = {}
         if date_from:
@@ -471,6 +509,31 @@ async def list_tickets(
         if date_to:
             q["draw_date"]["$lte"] = date_to
     return await db.tickets.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
+
+
+@api.delete("/tickets/bulk/all")
+async def bulk_delete_all_tickets(user=Depends(require_roles("super_admin"))):
+    """DANGER: Delete ALL tickets and related payouts. Super admin only."""
+    res = await db.tickets.delete_many({})
+    await db.payouts.delete_many({})
+    await audit(user["id"], "tickets.bulk_delete_all", {"deleted": res.deleted_count})
+    return {"deleted": res.deleted_count}
+
+
+@api.delete("/tickets/bulk/by-date")
+async def bulk_delete_tickets_by_date(
+    draw_date: str,
+    user=Depends(require_roles("super_admin")),
+):
+    """Delete all tickets for a given draw_date. Super admin only."""
+    if not draw_date:
+        raise HTTPException(400, "draw_date requis")
+    ticket_numbers = [t["ticket_number"] async for t in db.tickets.find({"draw_date": draw_date}, {"_id": 0, "ticket_number": 1})]
+    res = await db.tickets.delete_many({"draw_date": draw_date})
+    if ticket_numbers:
+        await db.payouts.delete_many({"ticket_number": {"$in": ticket_numbers}})
+    await audit(user["id"], "tickets.bulk_delete_by_date", {"date": draw_date, "deleted": res.deleted_count})
+    return {"deleted": res.deleted_count, "draw_date": draw_date}
 
 
 async def _enrich_ticket(ticket_number: str):
@@ -633,10 +696,12 @@ async def upsert_result(data: ResultCreate, user=Depends(require_roles("super_ad
             it["payout"] = payout
             win += payout
             new_items.append(it)
+        new_status = "won" if win > 0 else "lost"
         await db.tickets.update_one(
             {"id": t["id"]},
             {"$set": {"items": new_items, "payout_amount": round(win, 2),
-                      "has_result": True, "result_id": doc.get("id")}},
+                      "has_result": True, "result_id": doc.get("id"),
+                      "status": new_status}},
         )
         if win > 0:
             winner_count += 1
@@ -853,8 +918,8 @@ async def print_network(data: NetworkPrintInput, user=Depends(current_user)):
 # ---------- Dashboard ----------
 @api.get("/dashboard/top-machann")
 async def top_machann(month: Optional[str] = None, user=Depends(require_roles("super_admin", "directeur", "superviseur", "admin"))):
-    """Ranking of machanns by sales (and computed commission) for a given month YYYY-MM (default: current)."""
-    target_month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    """Ranking of machanns by sales (and computed commission) for a given month YYYY-MM (default: current Haiti month)."""
+    target_month = month or now_haiti().strftime("%Y-%m")
     # Match tickets created within target month
     pipeline = [
         {"$match": {
@@ -894,7 +959,7 @@ async def top_machann(month: Optional[str] = None, user=Depends(require_roles("s
 
 @api.get("/dashboard/stats")
 async def dashboard_stats(user=Depends(current_user)):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = now_haiti().strftime("%Y-%m-%d")
     q = {"created_at": {"$gte": today}}
     if user["role"] == "machann":
         q["machann_id"] = user["id"]
@@ -919,7 +984,7 @@ async def dashboard_stats(user=Depends(current_user)):
 
     trend = []
     for i in range(6, -1, -1):
-        day_dt = datetime.now(timezone.utc) - timedelta(days=i)
+        day_dt = now_haiti() - timedelta(days=i)
         day = day_dt.strftime("%Y-%m-%d")
         next_day = (day_dt + timedelta(days=1)).strftime("%Y-%m-%d")
         q2 = {**{k: v for k, v in q.items() if k != "created_at"},
@@ -1197,18 +1262,14 @@ async def ticket_pdf(ticket_number: str, user=Depends(current_user)):
 
 
 # ---------- Lottery Results Feed Import ----------
-@api.post("/results/import")
-async def import_results(date: Optional[str] = None, user=Depends(require_roles("super_admin", "admin", "directeur"))):
-    """Fetch latest results from external API and upsert into local results."""
+async def _do_import_results(target_date: str, updated_by: str = "auto") -> dict:
+    """Core import logic - reusable from API endpoint and background scheduler."""
     settings = await get_settings_doc()
     token = settings.get("lottery_api_token") or os.environ.get("LOTTERY_API_TOKEN")
     base_url = settings.get("lottery_api_url") or "https://www.lotteryresultsfeed.com/api"
     if not token:
-        raise HTTPException(400, "Token API non configuré")
-    target_date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return {"imported": 0, "date": target_date, "errors": [{"error": "Token API non configuré"}], "skipped": True}
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
-    # cache external lottery responses (since pick3 & pick4 share lottery IDs)
     cache: Dict[int, list] = {}
 
     async def fetch_results(lottery_id: int):
@@ -1247,11 +1308,9 @@ async def import_results(date: Optional[str] = None, user=Depends(require_roles(
                         pick4_val = "".join(str(b) for b in balls[:4])
                         break
             if pick3_val or pick4_val:
-                # Derive 1st boul = last 2 digits of pick3
                 bolet = []
                 if pick3_val:
                     bolet = [pick3_val[-2:], "", ""]
-                # Upsert
                 existing = await db.results.find_one({"lottery_id": lot["id"], "draw_date": target_date}, {"_id": 0})
                 doc = {
                     "lottery_id": lot["id"], "draw_date": target_date,
@@ -1259,14 +1318,13 @@ async def import_results(date: Optional[str] = None, user=Depends(require_roles(
                     "pick4": pick4_val or (existing or {}).get("pick4", ""),
                     "pick5": (existing or {}).get("pick5", ""),
                     "bolet": bolet if not (existing or {}).get("bolet") else existing["bolet"],
-                    "updated_at": now_iso(), "updated_by": user["id"],
+                    "updated_at": now_iso(), "updated_by": updated_by,
                 }
                 await db.results.update_one(
                     {"lottery_id": lot["id"], "draw_date": target_date},
                     {"$set": doc, "$setOnInsert": {"id": gen_id(), "created_at": now_iso(), "source": "external_api"}},
                     upsert=True,
                 )
-                # Recompute payouts for tickets
                 payouts_cfg = settings.get("payouts", {})
                 async for t in db.tickets.find({"lottery_id": lot["id"], "draw_date": target_date, "status": {"$ne": "cancelled"}}, {"_id": 0}):
                     win = 0.0
@@ -1280,13 +1338,44 @@ async def import_results(date: Optional[str] = None, user=Depends(require_roles(
                         it["payout"] = payout
                         win += payout
                         new_items.append(it)
+                    new_status = "won" if win > 0 else "lost"
                     await db.tickets.update_one({"id": t["id"]},
-                        {"$set": {"items": new_items, "payout_amount": round(win, 2), "has_result": True}})
+                        {"$set": {"items": new_items, "payout_amount": round(win, 2),
+                                  "has_result": True, "status": new_status}})
                 imported += 1
         except Exception as e:
             errors.append({"lottery": lot["name"], "error": str(e)})
-    await audit(user["id"], "results.import", {"date": target_date, "imported": imported})
     return {"imported": imported, "date": target_date, "errors": errors}
+
+
+@api.post("/results/import")
+async def import_results(date: Optional[str] = None, user=Depends(require_roles("super_admin", "admin", "directeur"))):
+    """Fetch latest results from external API and upsert into local results."""
+    target_date = date or now_haiti().strftime("%Y-%m-%d")
+    out = await _do_import_results(target_date, updated_by=user["id"])
+    if out.get("skipped"):
+        raise HTTPException(400, "Token API non configuré")
+    await audit(user["id"], "results.import", {"date": target_date, "imported": out["imported"]})
+    return out
+
+
+async def auto_import_loop():
+    """Background task: periodically imports lottery results."""
+    await asyncio.sleep(30)  # wait for app to settle
+    while True:
+        try:
+            settings = await get_settings_doc()
+            enabled = settings.get("auto_import_enabled", True)
+            interval_min = int(settings.get("auto_import_interval_minutes", 30) or 30)
+            if enabled and (settings.get("lottery_api_token") or os.environ.get("LOTTERY_API_TOKEN")):
+                today = now_haiti().strftime("%Y-%m-%d")
+                out = await _do_import_results(today, updated_by="auto_scheduler")
+                if out.get("imported"):
+                    logger.info(f"Auto-import: {out['imported']} résultats pour {today}")
+            await asyncio.sleep(max(60, interval_min * 60))
+        except Exception as e:
+            logger.error(f"Auto-import loop error: {e}")
+            await asyncio.sleep(300)
 
 
 # ---------- Machann commission ----------
@@ -1306,11 +1395,6 @@ async def machann_commission(date_from: Optional[str] = None, date_to: Optional[
     full_user = await db.users.find_one({"id": user["id"]}, {"_id": 0})
     pct = float(full_user.get("commission_percent", 0) or 0)
     return {"sales": round(total_sales, 2), "commission_percent": pct, "commission_amount": round(total_sales * pct / 100, 2)}
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    client.close()
 
 
 @app.on_event("startup")
@@ -1374,6 +1458,10 @@ async def startup():
         })
 
     await get_settings_doc()
+
+    # Start background auto-import scheduler
+    asyncio.create_task(auto_import_loop())
+    logger.info("Auto-import scheduler started")
 
 
 @app.on_event("shutdown")

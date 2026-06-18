@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/select";
 import { Download } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
+import { todayHaiti } from "@/lib/time";
 
 export default function Reports() {
   const { t, formatMoney } = useApp();
@@ -40,7 +41,7 @@ export default function Reports() {
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `rapport-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.href = url; a.download = `rapport-${todayHaiti()}.csv`;
     a.click();
   };
 
@@ -99,28 +100,52 @@ export default function Reports() {
                 <Bar dataKey="payouts" fill="#EF4444" />
               </BarChart>
             </ResponsiveContainer>
-            <table className="w-full text-sm mt-6">
-              <thead className="text-xs uppercase tracking-wider text-zinc-500 font-bold border-b border-white/10">
-                <tr>
-                  <th className="text-left py-2">{t("groupBy")}</th>
-                  <th className="text-right py-2">{t("tickets")}</th>
-                  <th className="text-right py-2">{t("salesToday")}</th>
-                  <th className="text-right py-2">{t("paymentsToday")}</th>
-                  <th className="text-right py-2">{t("profit")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={i} className="border-b border-white/5">
-                    <td className="py-2 font-bold">{r.key}</td>
-                    <td className="py-2 text-right font-mono">{r.tickets}</td>
-                    <td className="py-2 text-right font-mono">{formatMoney(r.sales)}</td>
-                    <td className="py-2 text-right font-mono text-red-400">{formatMoney(r.payouts)}</td>
-                    <td className="py-2 text-right font-mono font-bold text-green-400">{formatMoney(r.profit)}</td>
+            <div className="mt-6 overflow-x-auto">
+              <table className="w-full text-xs sm:text-sm min-w-[600px]">
+                <thead className="text-xs uppercase tracking-wider text-zinc-500 font-bold border-b border-white/10">
+                  <tr>
+                    <th className="text-left py-2 px-2">{groupBy === "machann" ? t("machann") : t("groupBy")}</th>
+                    <th className="text-right py-2 px-2">{t("tickets")}</th>
+                    <th className="text-right py-2 px-2">Ventes</th>
+                    <th className="text-right py-2 px-2">Gagnants</th>
+                    <th className="text-right py-2 px-2">Paiements</th>
+                    <th className="text-right py-2 px-2">{t("profit")}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i} className="border-b border-white/5 hover:bg-white/[0.02]">
+                      <td className="py-2 px-2 font-bold">{r.key}</td>
+                      <td className="py-2 px-2 text-right font-mono">{r.tickets}</td>
+                      <td className="py-2 px-2 text-right font-mono">{formatMoney(r.sales)}</td>
+                      <td className="py-2 px-2 text-right font-mono text-yellow-400">{r.winners || 0}</td>
+                      <td className="py-2 px-2 text-right font-mono text-red-400">{formatMoney(r.payouts)}</td>
+                      <td className="py-2 px-2 text-right font-mono font-bold text-green-400">{formatMoney(r.profit)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="border-t-2 border-yellow-400/30 bg-yellow-400/5">
+                  <tr>
+                    <td className="py-3 px-2 font-black uppercase text-yellow-400 tracking-wider">Total</td>
+                    <td className="py-3 px-2 text-right font-mono font-bold text-yellow-400">
+                      {rows.reduce((s, r) => s + (r.tickets || 0), 0)}
+                    </td>
+                    <td className="py-3 px-2 text-right font-mono font-bold text-yellow-400">
+                      {formatMoney(rows.reduce((s, r) => s + (r.sales || 0), 0))}
+                    </td>
+                    <td className="py-3 px-2 text-right font-mono font-bold text-yellow-400">
+                      {rows.reduce((s, r) => s + (r.winners || 0), 0)}
+                    </td>
+                    <td className="py-3 px-2 text-right font-mono font-bold text-red-400">
+                      {formatMoney(rows.reduce((s, r) => s + (r.payouts || 0), 0))}
+                    </td>
+                    <td className="py-3 px-2 text-right font-mono font-bold text-green-400">
+                      {formatMoney(rows.reduce((s, r) => s + (r.profit || 0), 0))}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           </>
         )}
       </Card>
