@@ -10,6 +10,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 import os
+import json
 import logging
 import uuid
 import io
@@ -27,6 +28,16 @@ import bcrypt
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 from reportlab.lib.units import mm
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+from reportlab.graphics.barcode.qr import QrCodeWidget
+from reportlab.graphics.shapes import Drawing
+from reportlab.graphics import renderPDF
+from pywebpush import webpush, WebPushException
+from py_vapid import Vapid
+import base64
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -717,6 +728,15 @@ async def upsert_result(data: ResultCreate, user=Depends(require_roles("super_ad
                 title="Tikè genyen pou peyman / Tickets gagnants",
                 body=f"{winner_count} tikè • {lottery_name} {data.draw_date} • R$ {total_owed:.2f}",
                 link="/payments")
+    # Web Push: notify all subscribers that results are out
+    try:
+        await send_push_to_all({
+            "title": "Rezilta yo soti! 🎰",
+            "body": f"{lottery_name} — {data.draw_date}",
+            "url": "/results",
+        })
+    except Exception as e:
+        logger.warning(f"Push notification failed: {e}")
     await audit(user["id"], "result.upsert", {"lottery": data.lottery_id, "date": data.draw_date, "winners": winner_count})
     return {**doc, "winners": winner_count, "total_owed": round(total_owed, 2)}
 
@@ -1195,77 +1215,252 @@ DEFAULT_LOTTERIES = [
 
 
 # ---------- PDF Generation ----------
+NAVY = colors.HexColor("#0A1A33")
+GOLD = colors.HexColor("#FACC15")
+CREAM = colors.HexColor("#FBFAF5")
+GAME_THEMES = {
+    "bolet": {"main": colors.HexColor("#B91C1C"), "light": colors.HexColor("#FEE2E2"), "label": "BÒLÈT", "sub": "(2 chif)"},
+    "pick3": {"main": colors.HexColor("#15803D"), "light": colors.HexColor("#DCFCE7"), "label": "PICK 3", "sub": "(3 chif)"},
+    "pick4": {"main": colors.HexColor("#1D4ED8"), "light": colors.HexColor("#DBEAFE"), "label": "PICK 4", "sub": "(4 chif)"},
+    "pick5": {"main": colors.HexColor("#7E22CE"), "light": colors.HexColor("#F3E8FF"), "label": "PICK 5", "sub": "(5 chif)"},
+    "mariage": {"main": colors.HexColor("#C2410C"), "light": colors.HexColor("#FFEDD5"), "label": "MARYAJ", "sub": "PÈYAN"},
+    "mariage_gratis": {"main": colors.HexColor("#BE185D"), "light": colors.HexColor("#FCE7F3"), "label": "MARYAJ", "sub": "GRATIS"},
+}
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "logo.jpeg")
+
+
 def ticket_pdf_bytes(ticket: dict, settings: dict) -> bytes:
-    """Generate a PDF receipt for a ticket (thermal style)."""
+    """Generate a colorful PDF receipt matching the TOP LOTTO branded design."""
     buf = io.BytesIO()
     width_mm = 80
     page_w = width_mm * mm
-    page_h = 200 * mm
-    c = canvas.Canvas(buf, pagesize=(page_w, page_h))
-    y = page_h - 8 * mm
-
-    def text(txt, x=4 * mm, size=8, bold=False, center=False):
-        nonlocal y
-        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        if center:
-            c.drawCentredString(page_w / 2, y, str(txt))
-        else:
-            c.drawString(x, y, str(txt))
-        y -= (size + 2)
-
-    def line():
-        nonlocal y
-        c.setDash(1, 2)
-        c.line(4 * mm, y, page_w - 4 * mm, y)
-        c.setDash()
-        y -= 6
-
-    text(settings.get("business_name", "TOP LOTTO"), size=14, bold=True, center=True)
-    text(settings.get("business_address", ""), size=7, center=True)
-    text(settings.get("business_phone", ""), size=7, center=True)
-    line()
-    text(f"TIKÈ: {ticket['ticket_number']}", size=9, bold=True)
-    text(f"DAT: {ticket.get('created_at', '')[:19].replace('T', ' ')}", size=8)
-    text(f"LOTRI: {ticket.get('lottery_name', '')}", size=8, bold=True)
-    text(f"TIRAJ: {ticket.get('draw_date', '')}", size=8)
-    text(f"MACHANN: {ticket.get('machann_name', '')}", size=8)
-    if ticket.get("customer_name"):
-        text(f"KLIYAN: {ticket['customer_name']}", size=8)
-    line()
-    text("JWÈT", size=9, bold=True, center=True)
-    game_labels = {"bolet": "BÒLÈT", "mariage": "MARYAJ", "pick3": "PICK 3", "pick4": "PICK 4", "pick5": "PICK 5"}
-    for it in ticket["items"]:
-        g = game_labels.get(it["game"], it["game"].upper())
-        win_tag = ""
-        if it.get("winning"):
-            win_tag = f" ★{['', '1ye', '2yèm', '3yèm'][it.get('win_position', 0)] if it['game'] == 'bolet' else 'GENYEN'}"
-        left = f"{g} {it['number']}{win_tag}"
-        right = f"{float(it.get('line_total', it['amount'])):.2f}"
-        c.setFont("Helvetica", 8)
-        c.drawString(4 * mm, y, left)
-        c.drawRightString(page_w - 4 * mm, y, right)
-        y -= 10
-    line()
-    text(f"TOTAL: R$ {float(ticket.get('total', 0)):.2f}", size=11, bold=True, center=True)
+    # Dynamic page height: estimate based on items
+    base_h = 130
+    base_h += 14 * max(1, sum(1 for it in ticket["items"] if it.get("game")))
     if ticket.get("payout_amount", 0) > 0:
-        line()
-        text("★ GENYEN ★", size=12, bold=True, center=True)
-        text(f"R$ {float(ticket['payout_amount']):.2f}", size=14, bold=True, center=True)
+        base_h += 20
+    if ticket.get("has_result") and ticket.get("result"):
+        base_h += 25
+    page_h = base_h * mm
+    c = canvas.Canvas(buf, pagesize=(page_w, page_h))
+
+    margin_x = 3 * mm
+    inner_w = page_w - 2 * margin_x
+
+    # ===== HEADER (navy with logo) =====
+    header_h = 32 * mm
+    y_top = page_h
+    c.setFillColor(NAVY)
+    c.rect(0, y_top - header_h, page_w, header_h, fill=1, stroke=0)
+    # Logo (circular crop via reportlab clipping not native — draw image as-is at center)
+    try:
+        from reportlab.lib.utils import ImageReader
+        logo = ImageReader(LOGO_PATH)
+        logo_size = 22 * mm
+        logo_x = (page_w - logo_size) / 2
+        logo_y = y_top - 4 * mm - logo_size
+        # Gold ring background circle
+        c.setFillColor(GOLD)
+        c.circle(page_w / 2, logo_y + logo_size / 2, logo_size / 2 + 1, fill=1, stroke=0)
+        c.drawImage(logo, logo_x, logo_y, width=logo_size, height=logo_size, mask='auto', preserveAspectRatio=True)
+    except Exception:
+        c.setFillColor(GOLD)
+        c.setFont("Helvetica-Bold", 18)
+        c.drawCentredString(page_w / 2, y_top - 16 * mm, "TOP LOTTO")
+    # business name + address at bottom of header
+    c.setFillColor(GOLD)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawCentredString(page_w / 2, y_top - 30 * mm, settings.get("business_name", "TOP LOTTO"))
+
+    cursor_y = y_top - header_h - 2 * mm
+
+    # ===== META GRID =====
+    c.setFillColor(colors.white)
+    meta_h = 22 * mm
+    c.rect(0, cursor_y - meta_h, page_w, meta_h, fill=1, stroke=0)
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 7)
+    created = (ticket.get("created_at") or "").replace("T", " ")[:19]
+    date_str = created[:10] if created else ""
+    time_str = created[11:16] if len(created) > 11 else ""
+    rows = [
+        ("AGENCE:", settings.get("business_name", "TOP LOTTO"), "TIKÈ N°:", ticket.get("ticket_number", "")),
+        ("VANDÈ:", ticket.get("machann_name", ""), "DAT:", date_str),
+        ("KLIYAN:", ticket.get("customer_name") or "—", "LÈ:", time_str),
+        ("LOTRI:", ticket.get("lottery_name", ""), "TIRAJ:", ticket.get("draw_date", "")),
+    ]
+    row_y = cursor_y - 4 * mm
+    for left_lbl, left_val, right_lbl, right_val in rows:
+        c.setFillColor(NAVY)
+        c.setFont("Helvetica-Bold", 6.5)
+        c.drawString(margin_x, row_y, left_lbl)
+        c.drawString(page_w / 2 + 1 * mm, row_y, right_lbl)
+        c.setFont("Helvetica", 7)
+        c.setFillColor(colors.black)
+        # truncate long values
+        left_val_str = str(left_val)[:20]
+        right_val_str = str(right_val)[:18]
+        c.drawString(margin_x + 12 * mm, row_y, left_val_str)
+        # ticket number bold red
+        if right_lbl == "TIKÈ N°:":
+            c.setFillColor(colors.HexColor("#DC2626"))
+            c.setFont("Helvetica-Bold", 7.5)
+        c.drawString(page_w / 2 + 11 * mm, row_y, right_val_str)
+        c.setFillColor(colors.black)
+        row_y -= 4 * mm
+    cursor_y = row_y - 1 * mm
+
+    # dashed separator
+    c.setStrokeColor(NAVY)
+    c.setDash(1, 2)
+    c.line(margin_x, cursor_y, page_w - margin_x, cursor_y)
+    c.setDash()
+    cursor_y -= 2 * mm
+
+    # ===== GAME SECTIONS (grouped) =====
+    grouped = {}
+    for it in ticket["items"]:
+        grouped.setdefault(it["game"], []).append(it)
+
+    section_order = ["bolet", "pick3", "pick4", "pick5", "mariage", "mariage_gratis"]
+    for game in section_order:
+        items = grouped.get(game)
+        if not items:
+            continue
+        theme = GAME_THEMES.get(game, GAME_THEMES["bolet"])
+        n_lines = len(items)
+        section_h = 6 * mm + 4 * mm * n_lines
+        # Light bg
+        c.setFillColor(theme["light"])
+        c.rect(margin_x, cursor_y - section_h, inner_w, section_h, fill=1, stroke=0)
+        # Colored circle badge with label
+        badge_r = 4 * mm
+        badge_cx = margin_x + badge_r + 1 * mm
+        badge_cy = cursor_y - badge_r - 1 * mm
+        c.setFillColor(theme["main"])
+        c.circle(badge_cx, badge_cy, badge_r, fill=1, stroke=0)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 5.5)
+        # short game tag inside circle
+        tag = {"bolet": "BL", "pick3": "P3", "pick4": "P4", "pick5": "P5", "mariage": "MR", "mariage_gratis": "GR"}.get(game, "?")
+        c.drawCentredString(badge_cx, badge_cy - 1.5, tag)
+        # Label next to badge
+        c.setFillColor(theme["main"])
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(badge_cx + badge_r + 1.5 * mm, badge_cy + 1, theme["label"])
+        c.setFillColor(colors.HexColor("#52525B"))
+        c.setFont("Helvetica", 6)
+        c.drawString(badge_cx + badge_r + 1.5 * mm, badge_cy - 2.5, theme["sub"])
+        # Items list (right-aligned amounts)
+        line_y = cursor_y - 5 * mm
+        for it in items:
+            c.setFillColor(colors.black)
+            c.setFont("Helvetica-Bold", 8)
+            num_str = str(it.get("number", ""))
+            win_tag = ""
+            if it.get("winning"):
+                pos_lbls = ["", "1ye", "2yèm", "3yèm"]
+                pos = it.get("win_position", 0)
+                win_tag = f"  ★{pos_lbls[pos] if game == 'bolet' and pos < len(pos_lbls) else 'GENYEN'}"
+                c.setFillColor(colors.HexColor("#15803D"))
+            c.drawString(badge_cx + badge_r + 16 * mm, line_y, num_str + win_tag)
+            c.setFont("Helvetica-Bold", 9)
+            c.setFillColor(colors.black)
+            amt = float(it.get("line_total", it.get("amount", 0)))
+            c.drawRightString(page_w - margin_x - 1 * mm, line_y, f"{amt:.2f}")
+            line_y -= 4 * mm
+        cursor_y -= section_h + 1 * mm
+
+    # ===== TOTAL BANNER (navy) =====
+    cursor_y -= 1 * mm
+    total_h = 10 * mm
+    c.setFillColor(NAVY)
+    c.rect(margin_x, cursor_y - total_h, inner_w, total_h, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(margin_x + 2 * mm, cursor_y - 4 * mm, "TOTAL JENERAL")
+    c.setFont("Helvetica-Bold", 14)
+    c.setFillColor(GOLD)
+    total_val = float(ticket.get("total", 0))
+    c.drawRightString(page_w - margin_x - 2 * mm, cursor_y - 6 * mm, f"R$ {total_val:.2f}")
+    cursor_y -= total_h + 2 * mm
+
+    # ===== WINNING BANNER =====
+    if ticket.get("payout_amount", 0) > 0:
+        win_h = 12 * mm
+        c.setFillColor(colors.HexColor("#16A34A"))
+        c.rect(margin_x, cursor_y - win_h, inner_w, win_h, fill=1, stroke=0)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawCentredString(page_w / 2, cursor_y - 3.5 * mm, "★ GENYEN ★")
+        c.setFont("Helvetica-Bold", 14)
+        c.drawCentredString(page_w / 2, cursor_y - 8 * mm, f"R$ {float(ticket['payout_amount']):.2f}")
         if ticket.get("paid"):
-            text("[ PEYE ]", size=9, bold=True, center=True)
-    line()
+            c.setFont("Helvetica-Bold", 6)
+            c.drawCentredString(page_w / 2, cursor_y - 11 * mm, "[ PEYE ]")
+        cursor_y -= win_h + 2 * mm
+
+    # ===== RESULTS =====
     if ticket.get("has_result") and ticket.get("result"):
         r = ticket["result"]
-        text("REZILTA", size=8, bold=True, center=True)
+        res_h = 12 * mm
+        c.setFillColor(colors.HexColor("#FEF3C7"))
+        c.rect(margin_x, cursor_y - res_h, inner_w, res_h, fill=1, stroke=0)
+        c.setFillColor(NAVY)
+        c.setFont("Helvetica-Bold", 7)
+        c.drawCentredString(page_w / 2, cursor_y - 3 * mm, "REZILTA OFISYÈL")
+        c.setFont("Helvetica", 7)
+        line_y = cursor_y - 6 * mm
         if r.get("bolet"):
-            text("BÒLÈT: " + " ".join(f"{lbl}={b}" for lbl, b in zip(["1ye", "2yèm", "3yèm"], r["bolet"]) if b), size=7, center=True)
+            bolet_str = "BÒLÈT: " + "  ".join(f"{lbl}={b}" for lbl, b in zip(["1ye", "2yèm", "3yèm"], r["bolet"]) if b)
+            c.drawCentredString(page_w / 2, line_y, bolet_str)
+            line_y -= 3 * mm
+        extras = []
         if r.get("pick3"):
-            text(f"P3: {r['pick3']}", size=7, center=True)
+            extras.append(f"P3: {r['pick3']}")
         if r.get("pick4"):
-            text(f"P4: {r['pick4']}", size=7, center=True)
-        line()
-    text(settings.get("ticket_footer", ""), size=7, center=True)
-    text(ticket["ticket_number"], size=7, center=True)
+            extras.append(f"P4: {r['pick4']}")
+        if extras:
+            c.drawCentredString(page_w / 2, line_y, "  •  ".join(extras))
+        cursor_y -= res_h + 2 * mm
+
+    # ===== QR CODE + FOOTER =====
+    qr_size = 22 * mm
+    qr_y = cursor_y - qr_size - 2 * mm
+    verify_base = settings.get("verify_base_url") or os.environ.get("VERIFY_BASE_URL") or ""
+    verify_url = f"{verify_base.rstrip('/')}/verify/{ticket.get('ticket_number')}" if verify_base else (ticket.get('ticket_number') or "")
+    try:
+        qr = QrCodeWidget(verify_url, barLevel='M')
+        bounds = qr.getBounds()
+        qr_w = bounds[2] - bounds[0]
+        qr_h = bounds[3] - bounds[1]
+        d = Drawing(qr_size, qr_size, transform=[qr_size / qr_w, 0, 0, qr_size / qr_h, 0, 0])
+        d.add(qr)
+        qr_x = (page_w - qr_size) / 2
+        renderPDF.draw(d, c, qr_x, qr_y)
+    except Exception as e:
+        logger.warning(f"QR generation failed: {e}")
+    c.setFont("Helvetica-Bold", 7)
+    c.setFillColor(NAVY)
+    c.drawCentredString(page_w / 2, qr_y - 2 * mm, "Eskane pou verifye tikè a")
+    c.setFont("Helvetica", 7)
+    c.setFillColor(colors.HexColor("#52525B"))
+    c.drawCentredString(page_w / 2, qr_y - 5 * mm, ticket.get("ticket_number", ""))
+    cursor_y = qr_y - 8 * mm
+
+    # Footer
+    c.setFillColor(colors.HexColor("#52525B"))
+    c.setFont("Helvetica-Oblique", 6.5)
+    footer_text = settings.get("ticket_footer", "Mèsi pou konfyans ou! Bòn chans!")
+    c.drawCentredString(page_w / 2, cursor_y, footer_text[:55])
+    cursor_y -= 4 * mm
+
+    # Bottom navy bar with URL
+    c.setFillColor(NAVY)
+    c.rect(0, 0, page_w, 6 * mm, fill=1, stroke=0)
+    c.setFillColor(GOLD)
+    c.setFont("Helvetica-Bold", 7)
+    c.drawCentredString(page_w / 2, 2 * mm, "★ www.toplotto.com ★")
 
     c.showPage()
     c.save()
@@ -1281,7 +1476,241 @@ async def ticket_pdf(ticket_number: str, user=Depends(current_user)):
                     headers={"Content-Disposition": f"inline; filename={ticket_number}.pdf"})
 
 
-# ---------- Lottery Results Feed Import ----------
+# ---------- PUBLIC TICKET VERIFICATION (no auth, used by QR scan) ----------
+@api.get("/public/verify/{ticket_number}")
+async def public_verify_ticket(ticket_number: str):
+    """Public endpoint — anyone can verify a ticket using its number/QR code."""
+    t = await db.tickets.find_one({"ticket_number": ticket_number}, {"_id": 0})
+    if not t:
+        raise HTTPException(404, "Tikè pa jwenn")
+    # Enrich with lottery name + result if available
+    if t.get("lottery_id"):
+        lot = await db.lotteries.find_one({"id": t["lottery_id"]}, {"_id": 0, "name": 1})
+        t["lottery_name"] = (lot or {}).get("name", "")
+    if t.get("result_id"):
+        r = await db.results.find_one({"id": t["result_id"]}, {"_id": 0})
+        t["result"] = r
+    else:
+        r = await db.results.find_one({"lottery_id": t.get("lottery_id"), "draw_date": t.get("draw_date")}, {"_id": 0})
+        if r:
+            t["result"] = r
+    # Mask sensitive ids — only return verification-relevant fields
+    return {
+        "ticket_number": t.get("ticket_number"),
+        "lottery_name": t.get("lottery_name"),
+        "draw_date": t.get("draw_date"),
+        "created_at": t.get("created_at"),
+        "machann_name": t.get("machann_name"),
+        "customer_name": t.get("customer_name"),
+        "total": t.get("total"),
+        "currency": t.get("currency", "BRL"),
+        "items": t.get("items"),
+        "status": t.get("status", "active"),
+        "has_result": t.get("has_result", False),
+        "payout_amount": t.get("payout_amount", 0),
+        "paid": t.get("paid", False),
+        "result": t.get("result"),
+    }
+
+
+# ---------- REPORTS PDF EXPORT ----------
+def reports_pdf_bytes(rows: list, totals: dict, settings: dict, params: dict) -> bytes:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], textColor=NAVY, alignment=TA_CENTER, fontSize=18, spaceAfter=8)
+    sub_style = ParagraphStyle('Sub', parent=styles['Normal'], alignment=TA_CENTER, fontSize=9, textColor=colors.HexColor('#52525B'), spaceAfter=15)
+    elements = []
+    elements.append(Paragraph(settings.get("business_name", "TOP LOTTO"), title_style))
+    elements.append(Paragraph(f"RAPÒ KONTABILITE — Group par {params.get('group_by','day')}", sub_style))
+    meta = f"Peryòd: {params.get('date_from','—')} → {params.get('date_to','—')}  •  Jenere: {now_haiti().strftime('%Y-%m-%d %H:%M')}"
+    elements.append(Paragraph(meta, sub_style))
+    # Table data
+    header = [params.get("group_by", "Group").upper(), "TIKÈ", "VANT (R$)", "GENYEN", "PEYE (R$)", "PWOFI (R$)"]
+    data = [header]
+    for r in rows:
+        data.append([
+            str(r.get("key", "")),
+            str(r.get("tickets", 0)),
+            f"{r.get('sales',0):.2f}",
+            str(r.get("winners", 0) or 0),
+            f"{r.get('payouts',0):.2f}",
+            f"{r.get('profit',0):.2f}",
+        ])
+    # Totals row
+    data.append([
+        "TOTAL",
+        str(totals.get("tickets", 0)),
+        f"{totals.get('sales',0):.2f}",
+        str(totals.get("winners", 0)),
+        f"{totals.get('payouts',0):.2f}",
+        f"{totals.get('profit',0):.2f}",
+    ])
+    t = Table(data, colWidths=[55*mm, 22*mm, 30*mm, 22*mm, 30*mm, 30*mm], repeatRows=1)
+    t.setStyle(TableStyle([
+        # Header
+        ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+        ('TEXTCOLOR', (0, 0), (-1, 0), GOLD),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        # Body
+        ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -2), 9),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F4F4F5')]),
+        # Total row
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FEF3C7')),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -1), (-1, -1), 10),
+        ('TEXTCOLOR', (0, -1), (-1, -1), NAVY),
+        ('LINEABOVE', (0, -1), (-1, -1), 1.5, GOLD),
+        # Grid
+        ('LINEBELOW', (0, 0), (-1, -2), 0.3, colors.HexColor('#D4D4D8')),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#A1A1AA')),
+    ]))
+    elements.append(t)
+    elements.append(Spacer(1, 10*mm))
+    footer_style = ParagraphStyle('Footer', parent=styles['Normal'], alignment=TA_CENTER, fontSize=8, textColor=NAVY)
+    elements.append(Paragraph(f"<b>★ TOP LOTTO ★</b>  •  {settings.get('business_address','')}  •  {settings.get('business_phone','')}", footer_style))
+    doc.build(elements)
+    return buf.getvalue()
+
+
+@api.get("/reports/sales/pdf")
+async def reports_sales_pdf(
+    group_by: str = "day",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user=Depends(require_roles("super_admin", "admin", "directeur", "superviseur")),
+):
+    """Export sales report as a styled PDF (per machann/day/lottery + grand total)."""
+    rows = await report_sales(group_by=group_by, date_from=date_from, date_to=date_to, user=user)
+    totals = {
+        "tickets": sum(r.get("tickets", 0) for r in rows),
+        "sales": round(sum(r.get("sales", 0) for r in rows), 2),
+        "winners": sum(r.get("winners", 0) or 0 for r in rows),
+        "payouts": round(sum(r.get("payouts", 0) for r in rows), 2),
+        "profit": round(sum(r.get("profit", 0) for r in rows), 2),
+    }
+    settings = await get_settings_doc()
+    pdf = reports_pdf_bytes(rows, totals, settings, {
+        "group_by": group_by,
+        "date_from": date_from or "—",
+        "date_to": date_to or "—",
+    })
+    fname = f"rapport-{group_by}-{(date_from or now_haiti().strftime('%Y%m%d'))}.pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+# ---------- WEB PUSH NOTIFICATIONS ----------
+async def get_vapid_keys() -> dict:
+    """Get or generate VAPID keypair, persisting it in settings collection."""
+    doc = await db.settings.find_one({"id": "vapid"}, {"_id": 0})
+    if doc and doc.get("private_b64") and doc.get("public_b64"):
+        return doc
+    # Generate new keypair
+    from cryptography.hazmat.primitives import serialization
+    v = Vapid()
+    v.generate_keys()
+    # Export private key as base64url-encoded DER (PKCS8) — required by pywebpush
+    der = v.private_key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    private_b64 = base64.urlsafe_b64encode(der).rstrip(b'=').decode()
+    # Export public key as base64url (uncompressed point format expected by browsers)
+    raw = v.public_key.public_numbers().x.to_bytes(32, 'big') + v.public_key.public_numbers().y.to_bytes(32, 'big')
+    public_b64 = base64.urlsafe_b64encode(b'\x04' + raw).rstrip(b'=').decode()
+    keys = {"id": "vapid", "private_b64": private_b64, "public_b64": public_b64, "created_at": now_iso()}
+    await db.settings.update_one({"id": "vapid"}, {"$set": keys}, upsert=True)
+    logger.info("Generated new VAPID keypair (DER base64url)")
+    return keys
+
+
+@api.get("/push/vapid-public-key")
+async def push_vapid_public_key():
+    """Returns the public VAPID key (base64url) for browsers to subscribe."""
+    keys = await get_vapid_keys()
+    return {"publicKey": keys["public_b64"]}
+
+
+class PushSubscribe(BaseModel):
+    endpoint: str
+    keys: Dict[str, str]
+    expirationTime: Optional[Any] = None
+
+
+@api.post("/push/subscribe")
+async def push_subscribe(sub: PushSubscribe, user=Depends(current_user)):
+    """Save a push subscription for the authenticated user."""
+    await db.push_subscriptions.update_one(
+        {"endpoint": sub.endpoint},
+        {"$set": {
+            "endpoint": sub.endpoint,
+            "keys": sub.keys,
+            "user_id": user["id"],
+            "user_role": user.get("role"),
+            "updated_at": now_iso(),
+        }, "$setOnInsert": {"created_at": now_iso()}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.delete("/push/subscribe")
+async def push_unsubscribe(endpoint: str, user=Depends(current_user)):
+    await db.push_subscriptions.delete_one({"endpoint": endpoint, "user_id": user["id"]})
+    return {"ok": True}
+
+
+async def send_push_to_all(payload: dict, role_filter: Optional[List[str]] = None):
+    """Send a Web Push notification to all (or filtered) subscriptions."""
+    keys = await get_vapid_keys()
+    subject = os.environ.get("VAPID_SUBJECT", "mailto:admin@toplotto.com")
+    q = {}
+    if role_filter:
+        q["user_role"] = {"$in": role_filter}
+    sent = 0
+    dead = []
+    async for s in db.push_subscriptions.find(q, {"_id": 0}):
+        try:
+            webpush(
+                subscription_info={"endpoint": s["endpoint"], "keys": s["keys"]},
+                data=json.dumps(payload),
+                vapid_private_key=keys["private_b64"],
+                vapid_claims={"sub": subject},
+            )
+            sent += 1
+        except WebPushException as e:
+            if getattr(e, "response", None) and e.response.status_code in (404, 410):
+                dead.append(s["endpoint"])
+            else:
+                logger.warning(f"Web push failed: {e}")
+        except Exception as e:
+            logger.warning(f"Web push unexpected error: {e}")
+    if dead:
+        await db.push_subscriptions.delete_many({"endpoint": {"$in": dead}})
+    return {"sent": sent, "cleaned": len(dead)}
+
+
+@api.post("/push/test")
+async def push_test(user=Depends(require_roles("super_admin", "admin"))):
+    """Send a test notification to verify push setup."""
+    out = await send_push_to_all({
+        "title": "TOP LOTTO — Test",
+        "body": "Notifikasyon yo aktif! ✓",
+        "url": "/dashboard",
+    })
+    return out
+
+
+
 async def _do_import_results(target_date: str, updated_by: str = "auto") -> dict:
     """Core import logic - reusable from API endpoint and background scheduler."""
     settings = await get_settings_doc()

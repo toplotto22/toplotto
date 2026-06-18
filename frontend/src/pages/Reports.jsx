@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from "@/components/ui/select";
-import { Download } from "lucide-react";
+import { Download, FileText } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 import { todayHaiti } from "@/lib/time";
 
@@ -45,12 +45,28 @@ export default function Reports() {
     a.click();
   };
 
+  const exportPdf = async () => {
+    const params = new URLSearchParams();
+    params.set("group_by", groupBy);
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", dateTo);
+    const token = localStorage.getItem("tl_token");
+    const res = await fetch(`${API}/reports/sales/pdf?` + params.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `rapport-${groupBy}-${todayHaiti()}.pdf`;
+    a.click();
+  };
+
   return (
     <div className="space-y-6" data-testid="reports-page">
       <h1 className="text-4xl font-black tracking-tighter">{t("reports")}</h1>
 
       <Card className="bg-[#121214] border-white/5 p-5">
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
           <div>
             <Label className="text-xs uppercase tracking-wider text-zinc-400">{t("groupBy")}</Label>
             <Select value={groupBy} onValueChange={setGroupBy}>
@@ -77,8 +93,13 @@ export default function Reports() {
             <Button data-testid="report-apply" onClick={load} className="w-full h-10 bg-yellow-400 hover:bg-yellow-500 text-black font-bold">{t("apply")}</Button>
           </div>
           <div className="flex items-end">
-            <Button data-testid="report-export" onClick={exportCsv} variant="outline" className="w-full h-10 bg-zinc-900 border-white/10 hover:bg-zinc-800">
+            <Button data-testid="report-export-csv" onClick={exportCsv} variant="outline" className="w-full h-10 bg-zinc-900 border-white/10 hover:bg-zinc-800">
               <Download className="w-4 h-4 mr-2" /> CSV
+            </Button>
+          </div>
+          <div className="flex items-end">
+            <Button data-testid="report-export-pdf" onClick={exportPdf} className="w-full h-10 bg-red-600 hover:bg-red-700 text-white font-bold">
+              <FileText className="w-4 h-4 mr-2" /> PDF
             </Button>
           </div>
         </div>

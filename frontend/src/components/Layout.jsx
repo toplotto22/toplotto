@@ -11,6 +11,7 @@ import {
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import NotificationsBell from "./NotificationsBell";
+import PushToggle from "./PushToggle";
 import Logo from "./Logo";
 import { getQueue } from "@/lib/offline";
 
@@ -154,6 +155,7 @@ export default function Layout() {
             </button>
 
             <NotificationsBell />
+            <PushToggle />
 
             <div className="flex bg-zinc-900 border border-white/10 rounded-md p-0.5" data-testid="lang-switch">
               {["fr", "ht"].map((l) => (

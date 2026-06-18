@@ -1,6 +1,6 @@
 /* TOP LOTTO Service Worker — cache static + offline fallback */
-const CACHE = 'toplotto-v1';
-const STATIC_ASSETS = ['/', '/index.html', '/manifest.json', '/icon.svg'];
+const CACHE = 'toplotto-v3';
+const STATIC_ASSETS = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/favicon.ico'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(STATIC_ASSETS)));
@@ -44,5 +44,35 @@ self.addEventListener('fetch', (event) => {
       }
       return res;
     }).catch(() => caches.match('/index.html')))
+  );
+});
+
+
+// Web Push handler — "Rezilta yo soti" notifications
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = { title: 'TOP LOTTO', body: event.data?.text() || '' }; }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'TOP LOTTO', {
+      body: data.body || '',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      vibrate: [200, 100, 200],
+      tag: data.tag || 'toplotto-push',
+      data: { url: data.url || '/' },
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = event.notification.data?.url || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if (client.url.includes(target) && 'focus' in client) return client.focus();
+      }
+      return self.clients.openWindow(target);
+    })
   );
 });

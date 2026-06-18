@@ -1,10 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import api from "@/lib/api";
 import { useApp } from "@/lib/context";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, ScanLine, Trophy, X, Printer } from "lucide-react";
+import { Search, ScanLine, Trophy, X, Printer, Camera, CameraOff } from "lucide-react";
 import { toast } from "sonner";
 import TicketPrint from "@/components/TicketPrint";
 import { GAME_LABELS } from "@/lib/i18n";
@@ -14,18 +14,62 @@ export default function Verify() {
   const [search, setSearch] = useState("");
   const [ticket, setTicket] = useState(null);
   const [showPrint, setShowPrint] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const scannerRef = useRef(null);
 
-  const verify = async (e) => {
-    e?.preventDefault();
-    if (!search.trim()) return;
+  const verifyByNumber = async (num) => {
+    if (!num?.trim()) return;
     try {
-      const { data } = await api.get(`/tickets/${search.trim().toUpperCase()}`);
+      const cleaned = num.trim().toUpperCase();
+      // If QR contains a URL, extract last segment as ticket number
+      const finalNum = cleaned.includes("/") ? cleaned.split("/").pop() : cleaned;
+      const { data } = await api.get(`/tickets/${finalNum}`);
       setTicket(data);
+      setSearch(finalNum);
     } catch (err) {
       toast.error(err.response?.data?.detail || t("error"));
       setTicket(null);
     }
   };
+
+  const verify = (e) => { e?.preventDefault(); verifyByNumber(search); };
+
+  const startScanner = async () => {
+    setScanning(true);
+    try {
+      const { Html5Qrcode } = await import("html5-qrcode");
+      // Wait for DOM
+      await new Promise((r) => setTimeout(r, 80));
+      scannerRef.current = new Html5Qrcode("qr-reader");
+      await scannerRef.current.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        async (decodedText) => {
+          await stopScanner();
+          verifyByNumber(decodedText);
+        },
+        () => {},
+      );
+    } catch (err) {
+      toast.error("Pa ka aksè ak kamera a: " + err.message);
+      setScanning(false);
+    }
+  };
+
+  const stopScanner = async () => {
+    try {
+      if (scannerRef.current?.isScanning) {
+        await scannerRef.current.stop();
+        scannerRef.current.clear();
+      }
+    } catch (_e) {
+      /* ignore stop errors */
+    }
+    scannerRef.current = null;
+    setScanning(false);
+  };
+
+  useEffect(() => () => { stopScanner(); }, []);
 
   const pay = async () => {
     try {
@@ -44,7 +88,7 @@ export default function Verify() {
     <div className="space-y-4 lg:space-y-6" data-testid="verify-page">
       <h1 className="text-2xl sm:text-4xl font-black tracking-tighter">{t("verify")}</h1>
 
-      <Card className="bg-[#121214] border-white/5 p-4 sm:p-5">
+      <Card className="bg-[#121214] border-white/5 p-4 sm:p-5 space-y-3">
         <form onSubmit={verify} className="flex flex-col sm:flex-row gap-2">
           <div className="relative flex-1">
             <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-yellow-400" />
@@ -60,7 +104,24 @@ export default function Verify() {
           <Button data-testid="verify-submit" type="submit" className="bg-yellow-400 hover:bg-yellow-500 text-black font-bold px-8 glow-gold">
             <Search className="w-4 h-4 mr-2" /> {t("verify")}
           </Button>
+          {!scanning ? (
+            <Button type="button" onClick={startScanner} data-testid="verify-scan"
+              className="bg-blue-500 hover:bg-blue-600 text-white font-bold">
+              <Camera className="w-4 h-4 mr-2" /> Eskane QR
+            </Button>
+          ) : (
+            <Button type="button" onClick={stopScanner} data-testid="verify-stop-scan"
+              className="bg-red-500 hover:bg-red-600 text-white font-bold">
+              <CameraOff className="w-4 h-4 mr-2" /> Sispann
+            </Button>
+          )}
         </form>
+        {scanning && (
+          <div className="rounded-lg overflow-hidden border-2 border-yellow-400/30 bg-black">
+            <div id="qr-reader" className="w-full max-w-md mx-auto" />
+            <div className="text-center text-xs text-zinc-400 py-2">Pwente kamera a sou QR code la</div>
+          </div>
+        )}
       </Card>
 
       {ticket && (

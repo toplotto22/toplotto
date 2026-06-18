@@ -11,6 +11,7 @@ import Payments from "@/pages/Payments";
 import Reports from "@/pages/Reports";
 import Admin from "@/pages/Admin";
 import Verify from "@/pages/Verify";
+import PublicVerify from "@/pages/PublicVerify";
 
 const Protected = ({ children }) => {
   const { user } = useApp();
@@ -24,6 +25,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/verify/:num" element={<PublicVerify />} />
           <Route path="/" element={<Protected><Layout /></Protected>}>
             <Route index element={<Dashboard />} />
             <Route path="sales" element={<Sales />} />

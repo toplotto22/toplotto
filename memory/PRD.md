@@ -15,6 +15,27 @@ PWA de gestion de loterie haïtienne/brésilienne avec rôles, ventes POS, résu
 - **Frontend**: React 19 + React Router + Tailwind + shadcn/ui + recharts; AppContext (auth/i18n/currency)
 - **Style**: Dark theme, Gold (#FACC15) primary, IBM Plex Mono pour nombres, Chivo pour titres
 
+## Implementations V7 (June 2026) — QR, PDF Reports, Web Push
+- [x] **QR Code sur tickets PDF**: chaque ticket affiche un QR code (URL vers /verify/{num}). Eskane et verifye instantanément
+- [x] **Page publique de vérification `/verify/:num`** (sans login): affiche logo, numéro, statut (RAN TIRAJ / GENYEN / PA GENYEN / DEJA PEYE), détails items colorés, résultat officiel si dispo
+- [x] **Scanner QR caméra** sur page Vérifier (auth): bouton "Eskane QR" → ouvre caméra via html5-qrcode → décode → vérifie automatiquement
+- [x] **Export PDF Rapports**: nouveau bouton rouge "PDF" sur page Reports. Génère PDF stylé avec en-tête navy/gold + tableau + ligne TOTAL surlignée
+- [x] **Web Push notifications (VAPID)**:
+  - Endpoint `GET /api/push/vapid-public-key` retourne clé publique
+  - Endpoint `POST /api/push/subscribe` enregistre subscription
+  - Endpoint `POST /api/push/test` envoie notification test
+  - Trigger automatique sur publication résultats: "Rezilta yo soti! 🎰 Florida Midi — 2026-06-18"
+  - Service Worker handler dans sw.js (push + notificationclick)
+  - Bouton bell/bell-off dans header Layout pour activer/désactiver
+- [x] **Bug VAPID corrigé**: clé privée stockée en base64url DER (PKCS8) au lieu de PEM (pywebpush incompatible avec PEM)
+- [x] **PWA icons updated**: 9 tailles PNG du logo TOP LOTTO (16→512), favicon.ico, apple-touch-icon, maskable variant
+- [x] **Tests V7**: 17/17 pytest pass + frontend public verify validé visuellement
+
+## Implementations V6 (June 2026) — PDF coloré + Logo PWA
+- [x] **PDF ticket entièrement redessiné**: header navy + logo rond doré, sections colorées par jeu (BÒLÈT rouge, PICK 3 vert, PICK 4 bleu, PICK 5 violet, MARYAJ orange, MARYAJ GRATIS rose), banner TOTAL navy/gold, banner GENYEN vert, zone REZILTA jaune, bottom bar navy "★ www.toplotto.com ★"
+- [x] **Logo TOP LOTTO comme icône d'application**: 9 tailles PNG (16/32/48/64/128/192/256/384/512), favicon.ico, apple-touch-icon (180×180), icon-maskable (Android adaptive), manifest.json mis à jour, SW cache bumpé v1→v2
+- [x] **Bug Render `DuplicateKeyError` corrigé**: super_admin seed maintenant fully idempotent (delete stale + upsert by email)
+
 ## Implementations V5 (June 2026) — Production deploy + UX features
 - [x] **Render deployment**: Frontend Live ✅ + Backend Live ✅ (Python 3.12.7 via PYTHON_VERSION env var)
 - [x] **Super admin credentials updated**: admin@toplotto.com / Admin@1000 (force-update idempotent on every startup)
