@@ -15,6 +15,24 @@ PWA de gestion de loterie haïtienne/brésilienne avec rôles, ventes POS, résu
 - **Frontend**: React 19 + React Router + Tailwind + shadcn/ui + recharts; AppContext (auth/i18n/currency)
 - **Style**: Dark theme, Gold (#FACC15) primary, IBM Plex Mono pour nombres, Chivo pour titres
 
+## Implementations V10 (June 2026) — Dashboard Profit + Page Paiements refonte
+- [x] **Carte HERO "Profit Net Pwopriyetè Jodi a"** sur Dashboard (super_admin/admin/directeur uniquement):
+  - Calcul: `Ventes − Gains à payer − Gains payés − Commissions machanns`
+  - Affichage en GROS (clamp 2.5rem→5rem), vert si positif / rouge si négatif
+  - Breakdown 4 colonnes: Ventes / Gains à payer / Gains payés / Commissions
+  - Indicateur "X tikè à payer" si gains non payés
+- [x] **Endpoint backend `/api/dashboard/stats` enrichi**:
+  - Nouveaux champs: `payouts_owed`, `commission_total`, `net_profit`, `tickets_unpaid_winning`, `machann_breakdown`
+  - Aggregation par machann avec commission_percent
+- [x] **Page Paiements entièrement refondue** (comme un comptable pro):
+  - Filtre période: Jodi a / Semèn / Mwa a / Tout
+  - 4 cartes de stats: À PAYER, PAYÉS, TOTAL GAGNANTS, VENTES
+  - 3 onglets: À payer / Payés / Historique
+  - Cards individuels par ticket avec numéros gagnants surlignés + montant en gros
+  - Bouton "💲 Marquer Payé" prominent
+  - Recherche par n° de ticket
+- [x] **Endpoint `/api/payments?period=today|week|month`** avec filtre côté serveur
+
 ## Implementations V9 (June 2026) — Mobile UX + winners + PWA auto-update
 - [x] **PWA auto-update aggressive**: SW network-first sur HTML+JS+CSS bundles. Auto-check toutes les 5 min. Quand une nouvelle version est détectée, l'app se recharge automatiquement (les utilisateurs installés reçoivent les MAJ sans intervention)
 - [x] **Indicateur "En ligne" maintenant visible sur mobile** (avant `hidden sm:flex` masquait sur petits écrans)

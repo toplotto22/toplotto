@@ -1142,18 +1142,58 @@ async def dashboard_stats(user=Depends(current_user)):
     sales_total = 0.0
     tickets_sold = 0
     tickets_winning = 0
-    payments_total = 0.0
+    tickets_unpaid_winning = 0
+    payments_total = 0.0          # gains réellement payés
+    payouts_owed = 0.0            # gains gagnés mais pas encore payés
+    commission_total = 0.0        # commission machann sur ventes du jour
     by_lottery = {}
+    by_machann = {}  # {machann_id: {name, sales, commission_percent}}
+
+    # Pre-load machann commissions
+    machann_cache = {}
+    async for m in db.users.find({"role": "machann"}, {"_id": 0, "id": 1, "name": 1, "commission_percent": 1}):
+        machann_cache[m["id"]] = m
 
     async for t in db.tickets.find(q, {"_id": 0}):
+        if t.get("status") == "cancelled":
+            continue
         sales_total += float(t.get("total", 0))
         tickets_sold += 1
-        if t.get("paid"):
-            payments_total += float(t.get("payout_amount", 0))
-        if t.get("payout_amount", 0) > 0:
+        payout = float(t.get("payout_amount", 0))
+        if payout > 0:
             tickets_winning += 1
+            if t.get("paid"):
+                payments_total += payout
+            else:
+                payouts_owed += payout
+                tickets_unpaid_winning += 1
         ln = t.get("lottery_name", "?")
         by_lottery[ln] = by_lottery.get(ln, 0) + float(t.get("total", 0))
+        # Aggregate machann sales for commission calc
+        mid = t.get("machann_id")
+        if mid:
+            agg = by_machann.setdefault(mid, {"name": t.get("machann_name", ""), "sales": 0.0})
+            agg["sales"] += float(t.get("total", 0))
+
+    # Commission breakdown
+    machann_breakdown = []
+    for mid, agg in by_machann.items():
+        m_info = machann_cache.get(mid, {})
+        pct = float(m_info.get("commission_percent") or 0)
+        commission = round(agg["sales"] * pct / 100.0, 2)
+        commission_total += commission
+        machann_breakdown.append({
+            "machann_id": mid,
+            "name": agg["name"] or m_info.get("name", "?"),
+            "sales": round(agg["sales"], 2),
+            "commission_percent": pct,
+            "commission_amount": commission,
+        })
+    machann_breakdown.sort(key=lambda x: x["sales"], reverse=True)
+
+    # Profit net = ventes − (gains payés + gains à payer) − commissions
+    total_payouts_committed = payments_total + payouts_owed
+    net_profit = sales_total - total_payouts_committed - commission_total
 
     trend = []
     for i in range(6, -1, -1):
@@ -1172,11 +1212,16 @@ async def dashboard_stats(user=Depends(current_user)):
 
     return {
         "sales_total": round(sales_total, 2),
-        "payments_total": round(payments_total, 2),
-        "profit": round(sales_total - payments_total, 2),
+        "payments_total": round(payments_total, 2),       # gains déjà payés
+        "payouts_owed": round(payouts_owed, 2),           # gains gagnants encore à payer
+        "commission_total": round(commission_total, 2),   # commission machanns à reverser
+        "net_profit": round(net_profit, 2),               # PROFIT NET propriétaire
+        "profit": round(sales_total - payments_total, 2),  # legacy (pour compat)
         "tickets_sold": tickets_sold,
         "tickets_winning": tickets_winning,
+        "tickets_unpaid_winning": tickets_unpaid_winning,
         "balance": round(sales_total - payments_total, 2),
+        "machann_breakdown": machann_breakdown,
         "by_lottery": [{"name": k, "value": round(v, 2)} for k, v in by_lottery.items()],
         "trend": trend,
         "recent_tickets": recent_tickets,
@@ -1334,8 +1379,34 @@ async def list_audit(user=Depends(require_roles("super_admin", "directeur"))):
 
 
 @api.get("/payments")
-async def list_payments(user=Depends(current_user)):
-    return await db.payouts.find({}, {"_id": 0}).sort("paid_at", -1).to_list(200)
+async def list_payments(
+    user=Depends(current_user),
+    period: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
+    """List paid winning tickets. Filter by period (today/week/month) or custom range."""
+    from datetime import timedelta as _td
+    today = now_haiti().date()
+    if period == "today":
+        date_from = today.isoformat()
+        date_to = today.isoformat()
+    elif period == "week":
+        start = today - _td(days=today.weekday())
+        date_from = start.isoformat()
+        date_to = today.isoformat()
+    elif period == "month":
+        date_from = today.replace(day=1).isoformat()
+        date_to = today.isoformat()
+    q = {}
+    if date_from or date_to:
+        q["paid_at"] = {}
+        if date_from:
+            q["paid_at"]["$gte"] = date_from
+        if date_to:
+            # paid_at is ISO datetime; use lt next day
+            q["paid_at"]["$lt"] = (datetime.fromisoformat(date_to) + _td(days=1)).date().isoformat()
+    return await db.payouts.find(q, {"_id": 0}).sort("paid_at", -1).to_list(500)
 
 
 # ---------- Seed ----------

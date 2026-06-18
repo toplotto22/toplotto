@@ -6,7 +6,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, PieChart, Pie, Cell, Legend,
 } from "recharts";
-import { TrendingUp, Wallet, Ticket as TicketIcon, Trophy, Banknote, ArrowUpRight, Crown } from "lucide-react";
+import { TrendingUp, Wallet, Ticket as TicketIcon, Trophy, Banknote, ArrowUpRight, Crown, AlertCircle } from "lucide-react";
 
 const StatCard = ({ icon: Icon, label, value, sub, color = "text-yellow-400", testId }) => (
   <Card
@@ -48,12 +48,64 @@ export default function Dashboard() {
     );
   }
 
+  const isOwner = ["super_admin", "directeur", "admin"].includes(user?.role);
+  const netProfit = stats.net_profit ?? 0;
+  const profitPositive = netProfit >= 0;
+
   return (
     <div className="space-y-6" data-testid="dashboard-page">
       <div>
-        <h1 className="text-4xl font-black tracking-tighter">{t("dashboard")}</h1>
+        <h1 className="text-2xl sm:text-4xl font-black tracking-tighter">{t("dashboard")}</h1>
         <p className="text-zinc-500 text-sm mt-1">{new Date().toLocaleDateString("fr-FR", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p>
       </div>
+
+      {/* HERO PROFIT NET CARD — owner-only */}
+      {isOwner && (
+        <Card data-testid="net-profit-card"
+          className={`relative overflow-hidden border-2 p-5 sm:p-7 ${
+            profitPositive
+              ? "bg-gradient-to-br from-emerald-950 via-[#0A1A33] to-emerald-900/30 border-emerald-500/30"
+              : "bg-gradient-to-br from-red-950 via-[#0A1A33] to-red-900/30 border-red-500/30"
+          }`}>
+          <div className="absolute top-0 right-0 w-40 h-40 bg-yellow-400/5 rounded-full -translate-y-20 translate-x-20 blur-3xl" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-1">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.25em] text-yellow-400 font-black">★ PROFIT NET PWOPRIYETÈ JODI A</div>
+                <div className="text-xs text-zinc-400 mt-1">Ventes − Gains à payer − Commission machanns</div>
+              </div>
+              {profitPositive
+                ? <ArrowUpRight className="w-7 h-7 text-emerald-400" />
+                : <AlertCircle className="w-7 h-7 text-red-400" />}
+            </div>
+            <div className={`mt-4 font-mono font-black tracking-tighter ${profitPositive ? "text-emerald-300" : "text-red-300"}`}
+              style={{ fontSize: "clamp(2.5rem, 8vw, 5rem)", lineHeight: 1 }}>
+              {profitPositive ? "+" : ""}{formatMoney(netProfit)}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-5 border-t border-white/10">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">Ventes</div>
+                <div className="text-lg font-mono font-bold text-yellow-400 mt-0.5">{formatMoney(stats.sales_total)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">Gains à payer</div>
+                <div className="text-lg font-mono font-bold text-orange-400 mt-0.5">−{formatMoney(stats.payouts_owed || 0)}</div>
+                {stats.tickets_unpaid_winning > 0 && (
+                  <div className="text-[9px] text-orange-400/70">{stats.tickets_unpaid_winning} tikè à payer</div>
+                )}
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">Gains payés</div>
+                <div className="text-lg font-mono font-bold text-red-400 mt-0.5">−{formatMoney(stats.payments_total)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">Commissions</div>
+                <div className="text-lg font-mono font-bold text-purple-400 mt-0.5">−{formatMoney(stats.commission_total || 0)}</div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
         <StatCard testId="stat-sales" icon={TrendingUp} label={t("salesToday")} value={formatMoney(stats.sales_total)} color="text-yellow-400" />
