@@ -23,7 +23,7 @@ const AUTO_DOUBLES = ["00", "11", "22", "33", "44", "55", "66", "77", "88", "99"
 
 export default function Sales() {
   const { t, lotteries, currency, formatMoney, user, settings } = useApp();
-  const [lotteryId, setLotteryId] = useState("");
+  const [lotteryIds, setLotteryIds] = useState([]);
   const [drawDate, setDrawDate] = useState(todayHaiti());
   const [number, setNumber] = useState("");
   const [amount, setAmount] = useState("");
@@ -43,8 +43,14 @@ export default function Sales() {
   const amountRef = useRef(null);
 
   useEffect(() => {
-    if (lotteries.length && !lotteryId) setLotteryId(lotteries[0].id);
-  }, [lotteries, lotteryId]);
+    if (lotteries.length && lotteryIds.length === 0) setLotteryIds([lotteries[0].id]);
+  }, [lotteries, lotteryIds.length]);
+
+  const toggleLottery = (id) => {
+    setLotteryIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  };
+
+  const lotteryId = lotteryIds[0] || "";  // for legacy drawInfo computation
 
   const detected = detectGame(number.length);
 
@@ -150,7 +156,7 @@ export default function Sales() {
     toast.success(`${newItems.length} ${t("numbers")}`);
   };
 
-  const total = cart.reduce((s, it) => s + (it.amount || 0), 0);
+  const total = cart.reduce((s, it) => s + (it.amount || 0), 0) * Math.max(1, lotteryIds.length);
   const paidMariageTotal = cart.filter((it) => it.game === "mariage").reduce((s, it) => s + (it.amount || 0), 0);
   const gratisThreshold = settings?.gratis?.threshold_brl || 20;
   const gratisCount = settings?.gratis?.count || 2;
@@ -178,22 +184,24 @@ export default function Sales() {
   };
 
   const sell = async () => {
-    if (!lotteryId || cart.length === 0) {
+    if (lotteryIds.length === 0 || cart.length === 0) {
       toast.error(t("cart") + ": " + t("empty"));
       return;
     }
     const payload = {
-      lottery_id: lotteryId, draw_date: drawDate,
+      lottery_ids: lotteryIds, draw_date: drawDate,
       currency, items: cart, customer_name: customer,
     };
     if (!isOnline()) {
       const n = queueTicket(payload);
       toast.warning(`${t("offline")} — ${n} ${t("pendingSync")}`);
+      const lotNames = lotteryIds.map((lid) => lotteries.find((l) => l.id === lid)?.name).filter(Boolean);
       const fakeTicket = {
         ticket_number: `LOCAL-${Date.now().toString().slice(-6)}`,
         ...payload,
-        lottery_name: lotteries.find((l) => l.id === lotteryId)?.name || "?",
-        total: cart.reduce((s, it) => s + (it.amount || 0), 0),
+        lottery_name: lotNames[0] || "?",
+        lottery_names: lotNames,
+        total: cart.reduce((s, it) => s + (it.amount || 0), 0) * lotteryIds.length,
         machann_name: user?.name,
         created_at: new Date().toISOString(),
         status: "active",
@@ -245,19 +253,29 @@ export default function Sales() {
         <Card className="bg-[#121214] border-white/5 p-4 sm:p-5 lg:col-span-2 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs uppercase tracking-wider text-zinc-400">{t("lottery")}</Label>
-              <Select value={lotteryId} onValueChange={setLotteryId}>
-                <SelectTrigger data-testid="sales-lottery-select" className="bg-zinc-900 border-white/10 h-11 mt-2">
-                  <SelectValue placeholder={t("selectLottery")} />
-                </SelectTrigger>
-                <SelectContent className="bg-zinc-900 border-white/10 text-white max-h-[60vh]">
-                  {lotteries.map((l) => (
-                    <SelectItem key={l.id} value={l.id} className="focus:bg-yellow-400/10 focus:text-yellow-400">
-                      {l.name} <span className="text-zinc-500 ml-2 font-mono text-xs">{l.local_time}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label className="text-xs uppercase tracking-wider text-zinc-400 flex items-center justify-between">
+                <span>{t("lottery")}</span>
+                {lotteryIds.length > 1 && (
+                  <span className="text-yellow-400 font-mono">★ {lotteryIds.length} loteri</span>
+                )}
+              </Label>
+              <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-white/10 bg-zinc-900 divide-y divide-white/5" data-testid="sales-lottery-multi">
+                {lotteries.map((l) => {
+                  const checked = lotteryIds.includes(l.id);
+                  return (
+                    <label key={l.id}
+                      data-testid={`lottery-opt-${l.id}`}
+                      className={`flex items-center justify-between gap-2 px-3 py-2 cursor-pointer hover:bg-white/[0.03] ${checked ? "bg-yellow-400/10" : ""}`}>
+                      <div className="flex items-center gap-2">
+                        <input type="checkbox" checked={checked} onChange={() => toggleLottery(l.id)}
+                          className="w-4 h-4 accent-yellow-400" />
+                        <span className={`text-sm ${checked ? "text-yellow-400 font-bold" : "text-zinc-300"}`}>{l.name}</span>
+                      </div>
+                      <span className="text-[10px] text-zinc-500 font-mono">{l.local_time}</span>
+                    </label>
+                  );
+                })}
+              </div>
               {drawInfo && (
                 <div className={`mt-2 text-xs px-2 py-1.5 rounded font-bold flex items-center justify-between gap-2 ${
                   drawInfo.isOpen

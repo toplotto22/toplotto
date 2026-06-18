@@ -15,6 +15,25 @@ PWA de gestion de loterie haïtienne/brésilienne avec rôles, ventes POS, résu
 - **Frontend**: React 19 + React Router + Tailwind + shadcn/ui + recharts; AppContext (auth/i18n/currency)
 - **Style**: Dark theme, Gold (#FACC15) primary, IBM Plex Mono pour nombres, Chivo pour titres
 
+## Implementations V8 (June 2026) — Multi-lottery, Replay, PDF lang, time fix
+- [x] **Bug timezone PDF corrigé**: les dates/heures sur les PDF utilisent maintenant `format_haiti_dt()` (conversion UTC→Haiti TZ), alignées avec l'affichage app
+- [x] **Logo PDF parfaitement rond**: génération PIL avec masque circulaire alpha (cache `logo_circle.png`)
+- [x] **Multi-loteries sur un seul ticket**: 
+  - Backend: champ `lottery_ids: List[str]` (compatible legacy `lottery_id`)
+  - Total = (somme items) × N loteries
+  - Endpoint `/results` recalcule payout en agrégeant les gains sur toutes les loteries où le ticket joue
+  - Statut "active" tant que toutes les loteries n'ont pas leurs résultats
+  - Frontend Sales: liste de cases à cocher (au lieu d'un dropdown single-select)
+  - Page Tickets: affichage "★ Multi (N)" pour les tickets multi-loteries
+- [x] **Bouton "Rejouer" / Duplicate ticket**:
+  - Backend: `POST /api/tickets/{n}/duplicate` recrée un ticket identique avec date du jour
+  - Frontend: icône RotateCcw verte sur chaque ticket (desktop + mobile)
+- [x] **Langue du ticket imprimé suit l'app**: 
+  - PDF accepte `?lang=ht|fr`
+  - Frontend passe automatiquement la langue courante (`language` de `useApp`)
+  - Labels traduits: AJANS/AGENCE, TIKÈ/TICKET, VANDÈ/VENDEUR, DAT/DATE, LÈ/HEURE, LOTRI/LOTERIE, TIRAJ/TIRAGE, TOTAL JENERAL/TOTAL GÉNÉRAL, GENYEN/GAGNANT, etc.
+- [x] **Tests V8**: 6/6 pytest pass (multi-lottery, duplicate, PDF lang)
+
 ## Implementations V7 (June 2026) — QR, PDF Reports, Web Push
 - [x] **QR Code sur tickets PDF**: chaque ticket affiche un QR code (URL vers /verify/{num}). Eskane et verifye instantanément
 - [x] **Page publique de vérification `/verify/:num`** (sans login): affiche logo, numéro, statut (RAN TIRAJ / GENYEN / PA GENYEN / DEJA PEYE), détails items colorés, résultat officiel si dispo

@@ -15,7 +15,7 @@ import {
   AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader,
   AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
 } from "@/components/ui/alert-dialog";
-import { Search, Eye, Edit2, Trash2, Ban, Trash, Filter as FilterIcon, AlertTriangle } from "lucide-react";
+import { Search, Eye, Edit2, Trash2, Ban, Trash, Filter as FilterIcon, AlertTriangle, RotateCcw } from "lucide-react";
 import TicketPrint from "@/components/TicketPrint";
 import { toast } from "sonner";
 import { GAME_LABELS } from "@/lib/i18n";
@@ -84,6 +84,14 @@ export default function Tickets() {
       return true;
     });
   }, [tickets, search, statusFilter, lotteryFilter, sessionFilter, dateFilter, lotteries]);
+
+  const replayTicket = async (num) => {
+    try {
+      const { data } = await api.post(`/tickets/${num}/duplicate`);
+      toast.success(`Tikè rejwe! Nouvo: ${data.ticket_number}`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || t("error")); }
+  };
 
   const openTicket = async (num) => {
     const { data } = await api.get(`/tickets/${num}`);
@@ -311,7 +319,11 @@ export default function Tickets() {
                 return (
                   <tr key={tk.id} className="border-b border-white/5 hover:bg-white/[0.02]">
                     <td className="py-3 px-4 font-mono font-bold text-yellow-400">{tk.ticket_number}</td>
-                    <td className="py-3 px-4">{tk.lottery_name}</td>
+                    <td className="py-3 px-4">
+                      {tk.lottery_names?.length > 1
+                        ? <span className="font-bold text-yellow-400">★ Multi ({tk.lottery_names.length})</span>
+                        : tk.lottery_name}
+                    </td>
                     <td className="py-3 px-4 font-mono">{tk.draw_date}</td>
                     <td className="py-3 px-4 text-zinc-400">{tk.machann_name}</td>
                     <td className="py-3 px-4 text-right font-mono font-bold">{formatMoney(tk.total)}</td>
@@ -330,6 +342,13 @@ export default function Tickets() {
                           onClick={() => openTicket(tk.ticket_number)}
                           className="text-yellow-400 hover:bg-yellow-400/10 h-7 w-7 p-0">
                           <Eye className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost"
+                          data-testid={`ticket-replay-${tk.ticket_number}`}
+                          onClick={() => replayTicket(tk.ticket_number)}
+                          title="Rejouer ce ticket"
+                          className="text-green-400 hover:bg-green-400/10 h-7 w-7 p-0">
+                          <RotateCcw className="w-3.5 h-3.5" />
                         </Button>
                         {isSuperAdmin && tk.status !== "cancelled" && (
                           <Button size="sm" variant="ghost"
@@ -371,7 +390,9 @@ export default function Tickets() {
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                <div><span className="text-zinc-500">Loterie:</span> <span className="text-white">{tk.lottery_name}</span></div>
+                <div><span className="text-zinc-500">Loterie:</span> <span className="text-white">
+                  {tk.lottery_names?.length > 1 ? `★ Multi (${tk.lottery_names.length})` : tk.lottery_name}
+                </span></div>
                 <div><span className="text-zinc-500">Tirage:</span> <span className="font-mono">{tk.draw_date}</span></div>
                 <div className="col-span-2"><span className="text-zinc-500">Machann:</span> <span className="text-zinc-300">{tk.machann_name}</span></div>
               </div>
@@ -392,6 +413,12 @@ export default function Tickets() {
                     onClick={() => openTicket(tk.ticket_number)}
                     className="text-yellow-400 hover:bg-yellow-400/10 h-8 w-8 p-0">
                     <Eye className="w-4 h-4" />
+                  </Button>
+                  <Button size="sm" variant="ghost"
+                    onClick={() => replayTicket(tk.ticket_number)}
+                    title="Rejouer"
+                    className="text-green-400 hover:bg-green-400/10 h-8 w-8 p-0">
+                    <RotateCcw className="w-4 h-4" />
                   </Button>
                   {isSuperAdmin && tk.status !== "cancelled" && (
                     <Button size="sm" variant="ghost"

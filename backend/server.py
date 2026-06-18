@@ -174,9 +174,10 @@ class TicketItem(BaseModel):
 
 
 class TicketCreate(BaseModel):
-    lottery_id: str
+    lottery_id: Optional[str] = None  # legacy single-lottery (kept for back-compat)
+    lottery_ids: Optional[List[str]] = None  # multi-lottery: same numbers played on each
     draw_date: str
-    currency: str
+    currency: str = "BRL"
     items: List[TicketItem]
     customer_name: Optional[str] = ""
 
@@ -414,16 +415,27 @@ def compute_payout(item, results, payouts_cfg, gratis_cfg=None):
 # ---------- Tickets ----------
 @api.post("/tickets")
 async def create_ticket(data: TicketCreate, user=Depends(current_user)):
-    lottery = await db.lotteries.find_one({"id": data.lottery_id}, {"_id": 0})
-    if not lottery:
-        raise HTTPException(404, "Loterie introuvable")
-    try:
-        tz = ZoneInfo(lottery.get("timezone") or "America/New_York")
-        local_today = datetime.now(tz).strftime("%Y-%m-%d")
-    except Exception:
-        local_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if data.draw_date == local_today:
-        if not is_sales_open(lottery):
+    # Normalize: support both lottery_id (single) and lottery_ids (multi)
+    lottery_ids = data.lottery_ids if data.lottery_ids else ([data.lottery_id] if data.lottery_id else [])
+    lottery_ids = [lid for lid in lottery_ids if lid]
+    if not lottery_ids:
+        raise HTTPException(400, "Au moins une loterie est requise")
+
+    lotteries_docs = await db.lotteries.find({"id": {"$in": lottery_ids}}, {"_id": 0}).to_list(50)
+    if len(lotteries_docs) != len(lottery_ids):
+        raise HTTPException(404, "Une ou plusieurs loteries introuvables")
+    # keep order matching lottery_ids
+    lotteries_by_id = {lt["id"]: lt for lt in lotteries_docs}
+    lotteries_list = [lotteries_by_id[lid] for lid in lottery_ids if lid in lotteries_by_id]
+
+    # Check sales window for ALL selected lotteries
+    for lottery in lotteries_list:
+        try:
+            tz = ZoneInfo(lottery.get("timezone") or "America/New_York")
+            local_today = datetime.now(tz).strftime("%Y-%m-%d")
+        except Exception:
+            local_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if data.draw_date == local_today and not is_sales_open(lottery):
             raise HTTPException(400, f"Vente fermée pour {lottery['name']} — tirage trop proche")
 
     # Validate MARYAJ GRATIS: require paid mariage total >= threshold and count <= configured
@@ -452,10 +464,12 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
 
     items = []
     total = 0.0
+    n_lots = len(lotteries_list)
     for it in data.items:
-        line_total = float(it.amount)
+        # When playing on multiple lotteries, the per-line amount is multiplied
+        line_total = float(it.amount) * n_lots
         total += line_total
-        items.append({**it.model_dump(), "line_total": line_total})
+        items.append({**it.model_dump(), "line_total": line_total, "unit_amount": float(it.amount)})
 
     seq_doc = await db.counters.find_one_and_update(
         {"id": "ticket_seq"}, {"$inc": {"value": 1}},
@@ -464,9 +478,14 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
     seq = (seq_doc or {}).get("value", 1)
     ticket_number = f"TL{now_haiti().strftime('%y%m%d')}{seq:05d}"
 
+    primary_lottery = lotteries_list[0]
     doc = {
         "id": gen_id(), "ticket_number": ticket_number,
-        "lottery_id": data.lottery_id, "lottery_name": lottery["name"],
+        # Primary lottery kept for back-compat with legacy code paths (winning calc, filtering)
+        "lottery_id": primary_lottery["id"], "lottery_name": primary_lottery["name"],
+        # New: full multi-lottery list
+        "lottery_ids": [lt["id"] for lt in lotteries_list],
+        "lottery_names": [lt["name"] for lt in lotteries_list],
         "draw_date": data.draw_date, "currency": data.currency,
         "items": items, "total": total,
         "customer_name": data.customer_name or "",
@@ -476,9 +495,30 @@ async def create_ticket(data: TicketCreate, user=Depends(current_user)):
         "created_at": now_iso(),
     }
     await db.tickets.insert_one(doc)
-    await audit(user["id"], "ticket.sell", {"ticket": ticket_number, "total": total})
+    await audit(user["id"], "ticket.sell", {"ticket": ticket_number, "total": total, "lotteries": len(lotteries_list)})
     doc.pop("_id", None)
     return doc
+
+
+@api.post("/tickets/{ticket_number}/duplicate")
+async def duplicate_ticket(ticket_number: str, user=Depends(current_user)):
+    """Re-issue (replay) a ticket: same items, same lotteries, today's draw date."""
+    src = await db.tickets.find_one({"ticket_number": ticket_number}, {"_id": 0})
+    if not src:
+        raise HTTPException(404, "Tikè pa jwenn")
+    # Permission: machann can only replay their own tickets
+    if user["role"] == "machann" and src.get("machann_id") != user["id"]:
+        raise HTTPException(403, "Pa otorize")
+    # Build a TicketCreate from source — strip payout/result fields
+    items = [TicketItem(game=it["game"], number=it["number"], amount=it.get("unit_amount", it.get("amount", 0))) for it in src.get("items", [])]
+    payload = TicketCreate(
+        lottery_ids=src.get("lottery_ids") or [src.get("lottery_id")],
+        draw_date=now_haiti().strftime("%Y-%m-%d"),
+        currency=src.get("currency", "BRL"),
+        items=items,
+        customer_name=src.get("customer_name", ""),
+    )
+    return await create_ticket(payload, user)
 
 
 @api.get("/tickets")
@@ -690,33 +730,74 @@ async def upsert_result(data: ResultCreate, user=Depends(require_roles("super_ad
     lottery = await db.lotteries.find_one({"id": data.lottery_id}, {"_id": 0})
     lottery_name = lottery["name"] if lottery else "?"
 
-    # Auto-update all tickets for this lottery + draw_date
+    # Auto-update all tickets for this lottery + draw_date (including multi-lottery tickets)
     settings = await get_settings_doc()
     payouts_cfg = settings.get("payouts", {})
     winner_count = 0
     total_owed = 0.0
-    async for t in db.tickets.find({"lottery_id": data.lottery_id, "draw_date": data.draw_date, "status": {"$ne": "cancelled"}}, {"_id": 0}):
-        win = 0.0
+    # Find tickets that include this lottery (single OR multi)
+    ticket_query = {
+        "$or": [
+            {"lottery_id": data.lottery_id},
+            {"lottery_ids": data.lottery_id},
+        ],
+        "draw_date": data.draw_date,
+        "status": {"$ne": "cancelled"},
+    }
+    async for t in db.tickets.find(ticket_query, {"_id": 0}):
+        # For multi-lottery tickets, we must aggregate payouts across ALL lotteries with available results
+        ticket_lotteries = t.get("lottery_ids") or [t.get("lottery_id")]
+        results_by_lottery = {}
+        for lid in ticket_lotteries:
+            if not lid:
+                continue
+            if lid == data.lottery_id:
+                results_by_lottery[lid] = doc
+            else:
+                other = await db.results.find_one({"lottery_id": lid, "draw_date": data.draw_date}, {"_id": 0})
+                if other:
+                    results_by_lottery[lid] = other
+        # Recompute items: for each item, check against each available lottery result
+        win_total = 0.0
         new_items = []
         for it in t["items"]:
-            won, pos, key = check_win(it, doc)
-            payout = compute_payout(it, doc, payouts_cfg, settings.get("gratis"))
-            it["winning"] = won
-            it["win_position"] = pos
-            it["win_key"] = key
-            it["payout"] = payout
-            win += payout
+            best_won = False
+            best_pos = 0
+            best_key = ""
+            item_payout = 0.0
+            unit_amount = float(it.get("unit_amount", it.get("amount", 0)))
+            # Make a clean copy of the item using unit_amount for payout calc
+            unit_item = {**it, "amount": unit_amount}
+            for lid, r in results_by_lottery.items():
+                w, p, k = check_win(unit_item, r)
+                if w:
+                    pay = compute_payout(unit_item, r, payouts_cfg, settings.get("gratis"))
+                    item_payout += pay
+                    if not best_won:
+                        best_won, best_pos, best_key = w, p, k
+            it["winning"] = best_won
+            it["win_position"] = best_pos
+            it["win_key"] = best_key
+            it["payout"] = round(item_payout, 2)
+            win_total += item_payout
             new_items.append(it)
-        new_status = "won" if win > 0 else "lost"
+        # Only mark as "lost" if results are available for ALL the ticket's lotteries
+        all_lotteries_have_results = len(results_by_lottery) == len([x for x in ticket_lotteries if x])
+        if win_total > 0:
+            new_status = "won"
+        elif all_lotteries_have_results:
+            new_status = "lost"
+        else:
+            new_status = "active"  # still waiting for other lotteries' results
         await db.tickets.update_one(
             {"id": t["id"]},
-            {"$set": {"items": new_items, "payout_amount": round(win, 2),
-                      "has_result": True, "result_id": doc.get("id"),
+            {"$set": {"items": new_items, "payout_amount": round(win_total, 2),
+                      "has_result": all_lotteries_have_results, "result_id": doc.get("id"),
                       "status": new_status}},
         )
-        if win > 0:
+        if win_total > 0:
             winner_count += 1
-            total_owed += win
+            total_owed += win_total
 
     # Notifications
     await create_notification(target_role="machann", type_="result",
@@ -1227,18 +1308,93 @@ GAME_THEMES = {
     "mariage_gratis": {"main": colors.HexColor("#BE185D"), "light": colors.HexColor("#FCE7F3"), "label": "MARYAJ", "sub": "GRATIS"},
 }
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "logo.jpeg")
+LOGO_CIRCLE_PATH = os.path.join(os.path.dirname(__file__), "assets", "logo_circle.png")
 
 
-def ticket_pdf_bytes(ticket: dict, settings: dict) -> bytes:
-    """Generate a colorful PDF receipt matching the TOP LOTTO branded design."""
+def _ensure_circular_logo():
+    """Generate a circular cropped + alpha-masked version of the logo (cached on disk)."""
+    if os.path.exists(LOGO_CIRCLE_PATH):
+        return LOGO_CIRCLE_PATH
+    try:
+        from PIL import Image, ImageDraw
+        src = Image.open(LOGO_PATH).convert("RGBA")
+        w, h = src.size
+        side = min(w, h)
+        left = (w - side) // 2
+        top = (h - side) // 2
+        sq = src.crop((left, top, left + side, top + side))
+        # Build circular alpha mask
+        mask = Image.new("L", (side, side), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, side, side), fill=255)
+        out = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        out.paste(sq, (0, 0), mask)
+        # Save as PNG with alpha
+        out.save(LOGO_CIRCLE_PATH, "PNG", optimize=True)
+    except Exception as e:
+        logger.warning(f"Circular logo generation failed: {e}")
+        return LOGO_PATH
+    return LOGO_CIRCLE_PATH
+
+
+# ---------- PDF Internationalization ----------
+PDF_LABELS = {
+    "ht": {
+        "agency": "AJANS", "ticket_no": "TIKÈ N°", "vendor": "VANDÈ", "date": "DAT",
+        "customer": "KLIYAN", "time": "LÈ", "lottery": "LOTRI", "draw": "TIRAJ",
+        "total": "TOTAL JENERAL", "winner": "★ GENYEN ★", "paid": "[ PEYE ]",
+        "official_result": "REZILTA OFISYÈL", "scan_to_verify": "Eskane pou verifye tikè a",
+        "footer_default": "Mèsi pou konfyans ou! Bòn chans!",
+        "pos_labels": ["1ye", "2yèm", "3yèm"], "win_tag_short": "GENYEN",
+        "multi_lottery": "LOTRI MILTIPL",
+    },
+    "fr": {
+        "agency": "AGENCE", "ticket_no": "TICKET N°", "vendor": "VENDEUR", "date": "DATE",
+        "customer": "CLIENT", "time": "HEURE", "lottery": "LOTERIE", "draw": "TIRAGE",
+        "total": "TOTAL GÉNÉRAL", "winner": "★ GAGNANT ★", "paid": "[ PAYÉ ]",
+        "official_result": "RÉSULTAT OFFICIEL", "scan_to_verify": "Scannez pour vérifier le ticket",
+        "footer_default": "Merci de votre confiance! Bonne chance!",
+        "pos_labels": ["1er", "2ème", "3ème"], "win_tag_short": "GAGNANT",
+        "multi_lottery": "LOTERIES MULTIPLES",
+    },
+}
+
+
+def format_haiti_dt(iso_str: str):
+    """Convert any ISO datetime to Haiti TZ formatted date + time."""
+    if not iso_str:
+        return "", ""
+    try:
+        # If naive, assume UTC
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local = dt.astimezone(HAITI_TZ)
+        return local.strftime("%Y-%m-%d"), local.strftime("%H:%M")
+    except Exception:
+        s = iso_str.replace("T", " ")[:19]
+        return s[:10], s[11:16] if len(s) > 11 else ""
+
+
+
+
+def ticket_pdf_bytes(ticket: dict, settings: dict, lang: str = "ht") -> bytes:
+    """Generate a colorful PDF receipt matching the TOP LOTTO branded design.
+    Supports multi-lottery tickets via ticket['lottery_names'] list (or ticket['lottery_name']).
+    Language: 'ht' (Kreyòl) or 'fr' (Français)."""
+    L = PDF_LABELS.get(lang, PDF_LABELS["ht"])
     buf = io.BytesIO()
     width_mm = 80
     page_w = width_mm * mm
-    # Dynamic page height: estimate based on items
-    base_h = 130
-    base_h += 14 * max(1, sum(1 for it in ticket["items"] if it.get("game")))
+    # Estimate page height
+    n_items = sum(1 for it in ticket.get("items", []) if it.get("game"))
+    # Multi-lottery list
+    multi_lotteries = ticket.get("lottery_names") or ([ticket.get("lottery_name")] if ticket.get("lottery_name") else [])
+    multi_lotteries = [ln for ln in multi_lotteries if ln]
+    base_h = 135
+    base_h += 14 * max(1, n_items)
+    base_h += 6 * max(0, len(multi_lotteries) - 1)  # extra space per additional lottery
     if ticket.get("payout_amount", 0) > 0:
-        base_h += 20
+        base_h += 22
     if ticket.get("has_result") and ticket.get("result"):
         base_h += 25
     page_h = base_h * mm
@@ -1247,79 +1403,102 @@ def ticket_pdf_bytes(ticket: dict, settings: dict) -> bytes:
     margin_x = 3 * mm
     inner_w = page_w - 2 * margin_x
 
-    # ===== HEADER (navy with logo) =====
-    header_h = 32 * mm
+    # ===== HEADER (navy with circular logo) =====
+    header_h = 38 * mm
     y_top = page_h
     c.setFillColor(NAVY)
     c.rect(0, y_top - header_h, page_w, header_h, fill=1, stroke=0)
-    # Logo (circular crop via reportlab clipping not native — draw image as-is at center)
+    # Decorative thin gold line at top
+    c.setFillColor(GOLD)
+    c.rect(0, y_top - 1.2 * mm, page_w, 1.2 * mm, fill=1, stroke=0)
+
+    # Truly circular logo
     try:
         from reportlab.lib.utils import ImageReader
-        logo = ImageReader(LOGO_PATH)
+        logo_path = _ensure_circular_logo()
+        logo = ImageReader(logo_path)
         logo_size = 22 * mm
         logo_x = (page_w - logo_size) / 2
-        logo_y = y_top - 4 * mm - logo_size
-        # Gold ring background circle
+        logo_y = y_top - 6 * mm - logo_size
+        # Gold ring (slightly larger circle behind)
         c.setFillColor(GOLD)
-        c.circle(page_w / 2, logo_y + logo_size / 2, logo_size / 2 + 1, fill=1, stroke=0)
+        c.circle(page_w / 2, logo_y + logo_size / 2, logo_size / 2 + 0.7 * mm, fill=1, stroke=0)
         c.drawImage(logo, logo_x, logo_y, width=logo_size, height=logo_size, mask='auto', preserveAspectRatio=True)
     except Exception:
         c.setFillColor(GOLD)
         c.setFont("Helvetica-Bold", 18)
         c.drawCentredString(page_w / 2, y_top - 16 * mm, "TOP LOTTO")
-    # business name + address at bottom of header
+        logo_y = y_top - 28 * mm
+        logo_size = 22 * mm
+
+    # Business name below logo
     c.setFillColor(GOLD)
-    c.setFont("Helvetica-Bold", 11)
-    c.drawCentredString(page_w / 2, y_top - 30 * mm, settings.get("business_name", "TOP LOTTO"))
+    c.setFont("Helvetica-Bold", 12)
+    c.drawCentredString(page_w / 2, logo_y - 4 * mm, settings.get("business_name", "TOP LOTTO"))
+    c.setFillColor(colors.HexColor("#94A3B8"))
+    c.setFont("Helvetica", 7)
+    addr = settings.get("business_address", "")
+    if addr:
+        c.drawCentredString(page_w / 2, logo_y - 7 * mm, addr[:50])
 
     cursor_y = y_top - header_h - 2 * mm
 
-    # ===== META GRID =====
-    c.setFillColor(colors.white)
-    meta_h = 22 * mm
-    c.rect(0, cursor_y - meta_h, page_w, meta_h, fill=1, stroke=0)
-    c.setFillColor(NAVY)
-    c.setFont("Helvetica-Bold", 7)
-    created = (ticket.get("created_at") or "").replace("T", " ")[:19]
-    date_str = created[:10] if created else ""
-    time_str = created[11:16] if len(created) > 11 else ""
-    rows = [
-        ("AGENCE:", settings.get("business_name", "TOP LOTTO"), "TIKÈ N°:", ticket.get("ticket_number", "")),
-        ("VANDÈ:", ticket.get("machann_name", ""), "DAT:", date_str),
-        ("KLIYAN:", ticket.get("customer_name") or "—", "LÈ:", time_str),
-        ("LOTRI:", ticket.get("lottery_name", ""), "TIRAJ:", ticket.get("draw_date", "")),
+    # ===== META GRID (white card) =====
+    meta_rows = 4
+    meta_h = 4 * mm * meta_rows + 4 * mm
+    c.setFillColor(CREAM)
+    c.roundRect(margin_x, cursor_y - meta_h, inner_w, meta_h, 2 * mm, fill=1, stroke=0)
+
+    date_str, time_str = format_haiti_dt(ticket.get("created_at"))
+    # Build lottery label (multi)
+    if len(multi_lotteries) > 1:
+        lottery_label = f"{L['multi_lottery']} ({len(multi_lotteries)})"
+    elif multi_lotteries:
+        lottery_label = multi_lotteries[0]
+    else:
+        lottery_label = ""
+
+    rows_data = [
+        (L["agency"], settings.get("business_name", "TOP LOTTO"), L["ticket_no"], ticket.get("ticket_number", "")),
+        (L["vendor"], ticket.get("machann_name", ""), L["date"], date_str),
+        (L["customer"], ticket.get("customer_name") or "—", L["time"], time_str),
+        (L["lottery"], lottery_label, L["draw"], ticket.get("draw_date", "")),
     ]
     row_y = cursor_y - 4 * mm
-    for left_lbl, left_val, right_lbl, right_val in rows:
+    col2_x = page_w / 2 + 1 * mm
+    for left_lbl, left_val, right_lbl, right_val in rows_data:
+        c.setFillColor(colors.HexColor("#94A3B8"))
+        c.setFont("Helvetica-Bold", 6)
+        c.drawString(margin_x + 2 * mm, row_y, left_lbl)
+        c.drawString(col2_x, row_y, right_lbl)
+        c.setFont("Helvetica-Bold", 8)
         c.setFillColor(NAVY)
-        c.setFont("Helvetica-Bold", 6.5)
-        c.drawString(margin_x, row_y, left_lbl)
-        c.drawString(page_w / 2 + 1 * mm, row_y, right_lbl)
-        c.setFont("Helvetica", 7)
-        c.setFillColor(colors.black)
-        # truncate long values
-        left_val_str = str(left_val)[:20]
-        right_val_str = str(right_val)[:18]
-        c.drawString(margin_x + 12 * mm, row_y, left_val_str)
-        # ticket number bold red
-        if right_lbl == "TIKÈ N°:":
+        c.drawString(margin_x + 2 * mm, row_y - 2.8 * mm, str(left_val)[:22])
+        if right_lbl == L["ticket_no"]:
             c.setFillColor(colors.HexColor("#DC2626"))
-            c.setFont("Helvetica-Bold", 7.5)
-        c.drawString(page_w / 2 + 11 * mm, row_y, right_val_str)
-        c.setFillColor(colors.black)
+            c.setFont("Helvetica-Bold", 8.5)
+        c.drawString(col2_x, row_y - 2.8 * mm, str(right_val)[:20])
+        c.setFillColor(NAVY)
         row_y -= 4 * mm
-    cursor_y = row_y - 1 * mm
+    cursor_y -= meta_h + 2 * mm
 
-    # dashed separator
-    c.setStrokeColor(NAVY)
-    c.setDash(1, 2)
-    c.line(margin_x, cursor_y, page_w - margin_x, cursor_y)
-    c.setDash()
-    cursor_y -= 2 * mm
+    # ===== MULTI-LOTTERY LIST (if more than 1) =====
+    if len(multi_lotteries) > 1:
+        ml_h = 4 * mm + 3.5 * mm * len(multi_lotteries)
+        c.setFillColor(colors.HexColor("#1E293B"))
+        c.roundRect(margin_x, cursor_y - ml_h, inner_w, ml_h, 1.5 * mm, fill=1, stroke=0)
+        c.setFillColor(GOLD)
+        c.setFont("Helvetica-Bold", 7)
+        c.drawString(margin_x + 2 * mm, cursor_y - 3 * mm, f"★ {L['multi_lottery']}")
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 8)
+        for i, ln in enumerate(multi_lotteries):
+            c.drawString(margin_x + 3 * mm, cursor_y - 6 * mm - i * 3.5 * mm, f"• {ln}")
+        cursor_y -= ml_h + 2 * mm
 
     # ===== GAME SECTIONS (grouped) =====
     grouped = {}
-    for it in ticket["items"]:
+    for it in ticket.get("items", []):
         grouped.setdefault(it["game"], []).append(it)
 
     section_order = ["bolet", "pick3", "pick4", "pick5", "mariage", "mariage_gratis"]
@@ -1329,104 +1508,108 @@ def ticket_pdf_bytes(ticket: dict, settings: dict) -> bytes:
             continue
         theme = GAME_THEMES.get(game, GAME_THEMES["bolet"])
         n_lines = len(items)
-        section_h = 6 * mm + 4 * mm * n_lines
-        # Light bg
+        section_h = 7.5 * mm + 4.5 * mm * n_lines
+        # Light bg, rounded
         c.setFillColor(theme["light"])
-        c.rect(margin_x, cursor_y - section_h, inner_w, section_h, fill=1, stroke=0)
+        c.roundRect(margin_x, cursor_y - section_h, inner_w, section_h, 2 * mm, fill=1, stroke=0)
         # Colored circle badge with label
-        badge_r = 4 * mm
-        badge_cx = margin_x + badge_r + 1 * mm
-        badge_cy = cursor_y - badge_r - 1 * mm
+        badge_r = 4.2 * mm
+        badge_cx = margin_x + badge_r + 2 * mm
+        badge_cy = cursor_y - badge_r - 1.5 * mm
         c.setFillColor(theme["main"])
         c.circle(badge_cx, badge_cy, badge_r, fill=1, stroke=0)
         c.setFillColor(colors.white)
-        c.setFont("Helvetica-Bold", 5.5)
-        # short game tag inside circle
+        c.setFont("Helvetica-Bold", 6)
         tag = {"bolet": "BL", "pick3": "P3", "pick4": "P4", "pick5": "P5", "mariage": "MR", "mariage_gratis": "GR"}.get(game, "?")
-        c.drawCentredString(badge_cx, badge_cy - 1.5, tag)
-        # Label next to badge
+        c.drawCentredString(badge_cx, badge_cy - 1.7, tag)
         c.setFillColor(theme["main"])
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(badge_cx + badge_r + 1.5 * mm, badge_cy + 1, theme["label"])
-        c.setFillColor(colors.HexColor("#52525B"))
-        c.setFont("Helvetica", 6)
-        c.drawString(badge_cx + badge_r + 1.5 * mm, badge_cy - 2.5, theme["sub"])
-        # Items list (right-aligned amounts)
-        line_y = cursor_y - 5 * mm
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(badge_cx + badge_r + 2 * mm, badge_cy + 1, theme["label"])
+        c.setFillColor(colors.HexColor("#64748B"))
+        c.setFont("Helvetica", 6.5)
+        c.drawString(badge_cx + badge_r + 2 * mm, badge_cy - 3, theme["sub"])
+        # Items list
+        line_y = cursor_y - 7 * mm
         for it in items:
-            c.setFillColor(colors.black)
-            c.setFont("Helvetica-Bold", 8)
             num_str = str(it.get("number", ""))
-            win_tag = ""
-            if it.get("winning"):
-                pos_lbls = ["", "1ye", "2yèm", "3yèm"]
-                pos = it.get("win_position", 0)
-                win_tag = f"  ★{pos_lbls[pos] if game == 'bolet' and pos < len(pos_lbls) else 'GENYEN'}"
+            is_win = bool(it.get("winning"))
+            if is_win:
                 c.setFillColor(colors.HexColor("#15803D"))
-            c.drawString(badge_cx + badge_r + 16 * mm, line_y, num_str + win_tag)
-            c.setFont("Helvetica-Bold", 9)
-            c.setFillColor(colors.black)
+            else:
+                c.setFillColor(NAVY)
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(badge_cx + badge_r + 18 * mm, line_y, num_str)
+            if is_win:
+                pos_lbls = L["pos_labels"]
+                pos = it.get("win_position", 0)
+                win_tag = pos_lbls[pos - 1] if game == "bolet" and 1 <= pos <= len(pos_lbls) else L["win_tag_short"]
+                c.setFont("Helvetica-Bold", 6)
+                c.drawString(badge_cx + badge_r + 18 * mm + 8 * mm, line_y - 0.5, f"★ {win_tag}")
+            c.setFont("Helvetica-Bold", 10)
+            c.setFillColor(NAVY)
             amt = float(it.get("line_total", it.get("amount", 0)))
-            c.drawRightString(page_w - margin_x - 1 * mm, line_y, f"{amt:.2f}")
-            line_y -= 4 * mm
-        cursor_y -= section_h + 1 * mm
+            c.drawRightString(page_w - margin_x - 2 * mm, line_y, f"R$ {amt:.2f}")
+            line_y -= 4.5 * mm
+        cursor_y -= section_h + 2 * mm
 
-    # ===== TOTAL BANNER (navy) =====
+    # ===== TOTAL BANNER (navy rounded) =====
     cursor_y -= 1 * mm
-    total_h = 10 * mm
+    total_h = 11 * mm
     c.setFillColor(NAVY)
-    c.rect(margin_x, cursor_y - total_h, inner_w, total_h, fill=1, stroke=0)
-    c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(margin_x + 2 * mm, cursor_y - 4 * mm, "TOTAL JENERAL")
-    c.setFont("Helvetica-Bold", 14)
+    c.roundRect(margin_x, cursor_y - total_h, inner_w, total_h, 2.5 * mm, fill=1, stroke=0)
     c.setFillColor(GOLD)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(margin_x + 3 * mm, cursor_y - 4.5 * mm, L["total"])
+    c.setFont("Helvetica-Bold", 16)
     total_val = float(ticket.get("total", 0))
-    c.drawRightString(page_w - margin_x - 2 * mm, cursor_y - 6 * mm, f"R$ {total_val:.2f}")
+    c.drawRightString(page_w - margin_x - 3 * mm, cursor_y - 7 * mm, f"R$ {total_val:.2f}")
     cursor_y -= total_h + 2 * mm
 
     # ===== WINNING BANNER =====
     if ticket.get("payout_amount", 0) > 0:
-        win_h = 12 * mm
+        win_h = 14 * mm
         c.setFillColor(colors.HexColor("#16A34A"))
-        c.rect(margin_x, cursor_y - win_h, inner_w, win_h, fill=1, stroke=0)
+        c.roundRect(margin_x, cursor_y - win_h, inner_w, win_h, 2.5 * mm, fill=1, stroke=0)
+        c.setFillColor(colors.HexColor("#FEFCE8"))
+        c.setFont("Helvetica-Bold", 9)
+        c.drawCentredString(page_w / 2, cursor_y - 4 * mm, L["winner"])
         c.setFillColor(colors.white)
-        c.setFont("Helvetica-Bold", 8)
-        c.drawCentredString(page_w / 2, cursor_y - 3.5 * mm, "★ GENYEN ★")
-        c.setFont("Helvetica-Bold", 14)
-        c.drawCentredString(page_w / 2, cursor_y - 8 * mm, f"R$ {float(ticket['payout_amount']):.2f}")
+        c.setFont("Helvetica-Bold", 16)
+        c.drawCentredString(page_w / 2, cursor_y - 9 * mm, f"R$ {float(ticket['payout_amount']):.2f}")
         if ticket.get("paid"):
-            c.setFont("Helvetica-Bold", 6)
-            c.drawCentredString(page_w / 2, cursor_y - 11 * mm, "[ PEYE ]")
+            c.setFillColor(GOLD)
+            c.setFont("Helvetica-Bold", 7)
+            c.drawCentredString(page_w / 2, cursor_y - 12 * mm, L["paid"])
         cursor_y -= win_h + 2 * mm
 
     # ===== RESULTS =====
     if ticket.get("has_result") and ticket.get("result"):
         r = ticket["result"]
-        res_h = 12 * mm
+        res_h = 13 * mm
         c.setFillColor(colors.HexColor("#FEF3C7"))
-        c.rect(margin_x, cursor_y - res_h, inner_w, res_h, fill=1, stroke=0)
+        c.roundRect(margin_x, cursor_y - res_h, inner_w, res_h, 2 * mm, fill=1, stroke=0)
         c.setFillColor(NAVY)
-        c.setFont("Helvetica-Bold", 7)
-        c.drawCentredString(page_w / 2, cursor_y - 3 * mm, "REZILTA OFISYÈL")
-        c.setFont("Helvetica", 7)
-        line_y = cursor_y - 6 * mm
+        c.setFont("Helvetica-Bold", 8)
+        c.drawCentredString(page_w / 2, cursor_y - 3.5 * mm, L["official_result"])
+        c.setFont("Helvetica-Bold", 8)
+        line_y = cursor_y - 7 * mm
         if r.get("bolet"):
-            bolet_str = "BÒLÈT: " + "  ".join(f"{lbl}={b}" for lbl, b in zip(["1ye", "2yèm", "3yèm"], r["bolet"]) if b)
-            c.drawCentredString(page_w / 2, line_y, bolet_str)
-            line_y -= 3 * mm
+            bolet_str = "  ".join(f"{lbl}={b}" for lbl, b in zip(L["pos_labels"], r["bolet"]) if b)
+            c.drawCentredString(page_w / 2, line_y, "BÒLÈT  " + bolet_str)
+            line_y -= 3.5 * mm
         extras = []
         if r.get("pick3"):
             extras.append(f"P3: {r['pick3']}")
         if r.get("pick4"):
             extras.append(f"P4: {r['pick4']}")
         if extras:
+            c.setFont("Helvetica", 7.5)
             c.drawCentredString(page_w / 2, line_y, "  •  ".join(extras))
         cursor_y -= res_h + 2 * mm
 
-    # ===== QR CODE + FOOTER =====
+    # ===== QR CODE =====
     qr_size = 22 * mm
-    qr_y = cursor_y - qr_size - 2 * mm
+    qr_y = cursor_y - qr_size - 1 * mm
     verify_base = settings.get("verify_base_url") or os.environ.get("VERIFY_BASE_URL") or ""
     verify_url = f"{verify_base.rstrip('/')}/verify/{ticket.get('ticket_number')}" if verify_base else (ticket.get('ticket_number') or "")
     try:
@@ -1442,18 +1625,17 @@ def ticket_pdf_bytes(ticket: dict, settings: dict) -> bytes:
         logger.warning(f"QR generation failed: {e}")
     c.setFont("Helvetica-Bold", 7)
     c.setFillColor(NAVY)
-    c.drawCentredString(page_w / 2, qr_y - 2 * mm, "Eskane pou verifye tikè a")
+    c.drawCentredString(page_w / 2, qr_y - 2.5 * mm, L["scan_to_verify"])
     c.setFont("Helvetica", 7)
     c.setFillColor(colors.HexColor("#52525B"))
     c.drawCentredString(page_w / 2, qr_y - 5 * mm, ticket.get("ticket_number", ""))
-    cursor_y = qr_y - 8 * mm
+    cursor_y = qr_y - 7 * mm
 
-    # Footer
-    c.setFillColor(colors.HexColor("#52525B"))
+    # Footer text
+    c.setFillColor(colors.HexColor("#64748B"))
     c.setFont("Helvetica-Oblique", 6.5)
-    footer_text = settings.get("ticket_footer", "Mèsi pou konfyans ou! Bòn chans!")
+    footer_text = settings.get("ticket_footer") or L["footer_default"]
     c.drawCentredString(page_w / 2, cursor_y, footer_text[:55])
-    cursor_y -= 4 * mm
 
     # Bottom navy bar with URL
     c.setFillColor(NAVY)
@@ -1468,10 +1650,10 @@ def ticket_pdf_bytes(ticket: dict, settings: dict) -> bytes:
 
 
 @api.get("/tickets/{ticket_number}/pdf")
-async def ticket_pdf(ticket_number: str, user=Depends(current_user)):
+async def ticket_pdf(ticket_number: str, lang: str = "ht", user=Depends(current_user)):
     t = await _enrich_ticket(ticket_number)
     settings = await get_settings_doc()
-    data = ticket_pdf_bytes(t, settings)
+    data = ticket_pdf_bytes(t, settings, lang=lang if lang in ("ht", "fr") else "ht")
     return Response(content=data, media_type="application/pdf",
                     headers={"Content-Disposition": f"inline; filename={ticket_number}.pdf"})
 

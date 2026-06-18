@@ -11,17 +11,18 @@ import {
 import { toast } from "sonner";
 
 export default function TicketPrint({ ticket, onClose }) {
-  const { t, settings } = useApp();
+  const { t, settings, language } = useApp();
   const printRef = useRef(null);
   const [printing, setPrinting] = useState(null);
   const cfg = getPrinterConfig();
   const width = cfg.width || 80;
   const isLocal = ticket.ticket_number?.startsWith("LOCAL-");
+  const lang = language === "fr" ? "fr" : "ht";
 
   const downloadPdf = async () => {
     try {
       const token = localStorage.getItem("tl_token");
-      const res = await fetch(`${API}/tickets/${ticket.ticket_number}/pdf`, {
+      const res = await fetch(`${API}/tickets/${ticket.ticket_number}/pdf?lang=${lang}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("PDF erè");
@@ -41,7 +42,7 @@ export default function TicketPrint({ ticket, onClose }) {
   const shareWhatsApp = async () => {
     try {
       const token = localStorage.getItem("tl_token");
-      const res = await fetch(`${API}/tickets/${ticket.ticket_number}/pdf`, {
+      const res = await fetch(`${API}/tickets/${ticket.ticket_number}/pdf?lang=${lang}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const blob = await res.blob();
@@ -147,11 +148,23 @@ export default function TicketPrint({ ticket, onClose }) {
             <div className="col-span-2"><b className="text-blue-900">MONNAIE :</b> R$ (REAIS)</div>
           </div>
           {/* Banner */}
-          <div className="bg-[#0A1A33] text-white text-[10px] px-3 py-2 grid grid-cols-3 gap-2 text-center font-bold">
-            <div>🌐 LOTERIE : {ticket.lottery_name?.split(" ")[0]?.toUpperCase()}</div>
-            <div>⏰ TIRAGE : {ticket.lottery_name?.split(" ").slice(1).join(" ")?.toUpperCase()}</div>
-            <div>💰 R$ (REAIS)</div>
-          </div>
+          {(ticket.lottery_names?.length > 1) ? (
+            <div className="bg-[#0A1A33] text-white text-[10px] px-3 py-2 font-bold">
+              <div className="text-center text-yellow-300 mb-1">★ LOTERIES MULTIPLES ({ticket.lottery_names.length})</div>
+              <div className="grid grid-cols-2 gap-1 text-center">
+                {ticket.lottery_names.map((ln, i) => (
+                  <div key={i} className="bg-white/10 rounded px-1.5 py-0.5">{ln}</div>
+                ))}
+              </div>
+              <div className="text-center mt-1.5 text-yellow-300">💰 R$ (REAIS) — Tirage {ticket.draw_date}</div>
+            </div>
+          ) : (
+            <div className="bg-[#0A1A33] text-white text-[10px] px-3 py-2 grid grid-cols-3 gap-2 text-center font-bold">
+              <div>🌐 LOTERIE : {ticket.lottery_name?.split(" ")[0]?.toUpperCase()}</div>
+              <div>⏰ TIRAGE : {ticket.lottery_name?.split(" ").slice(1).join(" ")?.toUpperCase()}</div>
+              <div>💰 R$ (REAIS)</div>
+            </div>
+          )}
           {/* Items grouped by game */}
           <div className="bg-white">
             <Section id="bolet" label="BÒLÈT" sub="(2 chiffres)" color="text-red-700" bg="bg-red-700" ringColor="ring-red-300"
